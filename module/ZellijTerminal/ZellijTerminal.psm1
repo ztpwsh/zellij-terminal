@@ -76,6 +76,7 @@ Export-ModuleMember `
         'Set-ZellijTerminalPadDevice',
         'Uninstall-ZellijTerminalPad',
         'Test-ZellijTerminal',
+        'Get-ZellijTerminalDiagnostic',
         'Test-ZellijTerminalPaste',
         'Repair-ZellijTerminalPaste',
         'Get-ZellijTerminalHotkey',

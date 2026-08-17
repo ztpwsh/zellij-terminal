@@ -154,4 +154,56 @@ function Test-ZellijTerminal {
     & (Get-ZtScript 'Test-Setup.ps1') -Session $Session -Prefix $Prefix
 }
 
+function Get-ZellijTerminalDiagnostic {
+    <#
+    .SYNOPSIS
+        Write one evidence bundle about this machine, for reading somewhere else.
+
+    .DESCRIPTION
+        Wraps scripts\Collect-Diagnostics.ps1.
+
+        NOT the same job as `zt check`. That one asks whether each layer works
+        and answers with a verdict; this one asks what is actually on the machine
+        and answers with the bytes. It exists for the case the verdicts cannot
+        reach: a clean `zt check` on a rig that does not work, because the files
+        that decide whether it starts - the layout above all - are generated per
+        machine and are not in any repository, so nobody can check them by
+        reading the source.
+
+        It changes nothing. -ParseLayout is the single exception and says so.
+
+        Returns the path it wrote, so it can be piped somewhere.
+
+    .EXAMPLE
+        zt diag
+        zt diag -ParseLayout
+        zt diag -Path C:\temp\bundle.md -NoRedact
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [string]$Path,
+        [string]$Session = 'claude',
+        [string]$Prefix  = 'claude-',
+
+        # Leave the user name, device name and profile path in the output.
+        [switch]$NoRedact,
+
+        # Ask Zellij to parse the deployed layout. Starts a throwaway session
+        # and deletes it; the only way to tell a KDL error from a missing
+        # session, because Zellij reports the first as the second.
+        [switch]$ParseLayout
+    )
+
+    $splat = @{
+        Session = $Session
+        Prefix  = $Prefix
+    }
+    if ($Path)        { $splat['Path']        = $Path }
+    if ($NoRedact)    { $splat['NoRedact']    = $true }
+    if ($ParseLayout) { $splat['ParseLayout'] = $true }
+
+    & (Get-ZtScript 'Collect-Diagnostics.ps1') @splat
+}
+
 

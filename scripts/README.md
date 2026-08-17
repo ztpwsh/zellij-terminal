@@ -12,6 +12,7 @@ What `zt` calls down to here for:
 | `zt close` | `zj-claude-project.ps1 -Remove` |
 | `zt next` / `prev` / `go` | `zj-claude-tab.ps1` |
 | `zt check` | `Test-Setup.ps1` |
+| `zt diag` | `Collect-Diagnostics.ps1` |
 
 `zt start` into an existing tab, `zt stop` and `zt restart` do not call a script
 — they focus the tab and inject keystrokes, which has no script equivalent.
@@ -39,6 +40,46 @@ Fix the **lowest** failing layer first. A broken layer makes everything above it
 look broken too.
 
 Add a check here whenever you add a capability.
+
+## `Collect-Diagnostics.ps1`
+
+Writes one file describing what is actually on this machine, for reading
+somewhere else.
+
+```powershell
+.\Collect-Diagnostics.ps1                      # -> %TEMP%\zt-diag-<stamp>.md
+.\Collect-Diagnostics.ps1 -ParseLayout         # also ask Zellij to parse the layout
+.\Collect-Diagnostics.ps1 -NoRedact -Path .\bundle.md
+```
+
+**It is not a second `Test-Setup.ps1`.** That one asks whether each layer works
+and answers with a verdict. This one asks what is on the machine and answers
+with the bytes, because the case it exists for is a *clean* `zt check` on a rig
+that does not work.
+
+The reason that case exists at all: every check in `Test-Setup.ps1` asks whether
+a file is **there**, and the files that decide whether this rig starts are
+generated per machine. `%APPDATA%\Zellij\config\layouts\claude.kdl` carries an
+absolute plugin path and an absolute `cwd`, both substituted at install time
+from `zellij/layouts/claude.kdl.template`. A layout that exists, parses, and
+points its plugin at a file that is not there passes every question the layer
+check knows how to ask, and gives you a session with no status bar. An
+unreplaced `{{PLUGINS}}` does the same and takes the tab's working directory
+with it. Neither prints anything.
+
+So it reads those files out verbatim, and where there is a source to compare
+against it **regenerates what the installer should have written and diffs**.
+Judging the diff is the reader's job, with the repo in front of them.
+
+The bundle opens with a **Signals** list — observations worth reading first,
+never verdicts — then the evidence for each. It ends with the `zt check` output,
+so a clean table and a signal can be read side by side.
+
+Redacted by default (user name, device name, profile path), because the file is
+written to be sent. It changes nothing on the machine; `-ParseLayout` is the one
+exception and says what it does: `--layout` cannot be combined with `--session`,
+so the throwaway session it creates cannot be named in advance, and the session
+list is captured before and after so only what appeared gets deleted.
 
 ## `zj-claude-tab.ps1`
 

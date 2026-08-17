@@ -198,6 +198,9 @@ function Invoke-ZellijTerminal {
         zt config                open the JSON in your editor
         zt validate              check the JSON and say what is wrong
         zt check                 layer check
+        zt diag                  write one evidence bundle to a file, for
+                                 reading somewhere else. Use it when `zt check`
+                                 is clean and the rig still does not work
 
         zt pad                   what the macro pad is wired to
         zt pad explain           what it is for, and whether you need one
@@ -282,6 +285,7 @@ function Invoke-ZellijTerminal {
         '^config$'         { return (Invoke-ZtForward 'Edit-ZellijTerminalConfig' $Rest) }
         '^validate$'       { return (Invoke-ZtForward 'Test-ZellijTerminalConfig' $Rest) }
         '^check$'          { return (Invoke-ZtForward 'Test-ZellijTerminal' $Rest) }
+        '^diag$'           { return (Invoke-ZtForward 'Get-ZellijTerminalDiagnostic' $Rest) }
         '^setup$'          { return (Invoke-ZtForward 'Start-ZellijTerminalSetup' $Rest) }
         '^uninstall$'      { return (Invoke-ZtForward 'Uninstall-ZellijTerminal' $Rest) }
         '^export$'         { return (Invoke-ZtForward 'Export-ZellijTerminal' $Rest) }
@@ -439,7 +443,7 @@ Register-ArgumentCompleter -CommandName 'Invoke-ZellijTerminal' -ParameterName '
     # something like `zt setup` defeats the point of it existing.
     $verbs = @('setup', 'uninstall', 'export', 'import', 'ls', 'all', 'waiting', 'pick', 'add', 'rm', 'publish', 'start', 'stop', 'restart',
                'close', 'attach', 'next', 'prev', 'go', 'sync', 'flag', 'unflag', 'park', 'restore', 'roots', 'root',
-               'config', 'validate', 'check', 'pad', 'paste', 'palette', 'dock', 'sessions', 'hotkeys', 'help')
+               'config', 'validate', 'check', 'diag', 'pad', 'paste', 'palette', 'dock', 'sessions', 'hotkeys', 'help')
     $verbs |
         Where-Object   { $_ -like "$wordToComplete*" } |
         ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }

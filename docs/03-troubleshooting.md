@@ -15,6 +15,16 @@ different fixes.
 | 4 target | `dir $env:TEMP\claude-zellij-flags` after Claude stops. |
 | registry | `zt` lists workspaces; `zt sync` clears records whose tabs are gone. |
 
+**When `zt check` is clean and the rig still does not work**, run `zt diag`. It
+writes one file describing what is actually on the machine — the layer check
+asks whether each file is *there*, and the two files that decide whether this rig
+starts are generated per machine and are in no repository, so nothing can check
+them by reading the source. A deployed `claude.kdl` whose plugin path points at a
+file that was never downloaded, or that still contains a literal `{{PLUGINS}}`,
+is a PASS on every question the layer check knows how to ask and a session with
+no status bar. `zt diag` reads those files out and diffs them against what this
+clone would generate. Send the file it writes; it is redacted by default.
+
 **A workspace stuck as `stale`** means a live record outlived its tab — a
 terminal closed with the X button rather than detached. `zt sync` clears it.
 **Stuck as `unavailable`** means this device has no root for it: see
