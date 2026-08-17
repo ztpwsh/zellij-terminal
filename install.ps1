@@ -56,7 +56,15 @@ param(
     # It does not when %LOCALAPPDATA% is redirected, which is how the test
     # suite runs the installer, and it need not when you are about to delete
     # every session anyway.
-    [switch]$SkipServerCheck
+    [switch]$SkipServerCheck,
+
+    # Do not start a throwaway Zellij session to prove the config that was just
+    # written actually produces one. The probe is the only check here that
+    # reads the RUNNING rig rather than files on disk, and it is the only part
+    # of this installer that creates anything outside your profile - a named
+    # session, deleted again seconds later. Skip it for an unattended run, or
+    # where starting a process is not wanted.
+    [switch]$SkipLiveProbe
 )
 
 $ErrorActionPreference = 'Stop'
@@ -776,6 +784,162 @@ if (-not $SkipHook) {
         }
     }
     Test-ZtClaim 'Claude Code hook registered' $hookOk "no working claude-zj-hook entry in $hookDst2"
+}
+
+# --- the live probe ---------------------------------------------------------
+#
+# EVERY CHECK ABOVE READS A FILE. That is not the same as the rig working, and
+# the difference is precisely where this project lost an evening: a machine
+# whose layout, config, plugin binary and permission grant were all provably
+# correct, with no status bar - because the session it kept attaching to had
+# been built before any of it and Zellij resurrects rather than rebuilds.
+#
+# So the last thing this installer does is start a session of its own from the
+# config it just wrote, ask that session what it is made of, and delete it.
+# `dump-layout` answers over the client/server socket, so no window is opened
+# and no focus is stolen - the same property that lets the macro pad drive an
+# unfocused session.
+#
+# It proves three things nothing else here can:
+#   - default_layout is actually LOADED, not merely present in a file
+#   - the layout PARSES. A KDL error is reported by Zellij as "Session not
+#     found", which reads as a missing session and sends you hunting elsewhere
+#   - a new session really contains the status bar pane, pointing at the wasm
+#     the layout names
+#
+# It cannot prove the bar RENDERED - that needs the permission, checked above,
+# and a plugin pane returns nothing to dump-screen anyway (verified across
+# every pane id, with a client attached).
+#
+# The session is NAMED rather than left to Zellij to name, so cleanup is exact
+# instead of inferred from a before-and-after session list.
+if ((-not $SkipLiveProbe) -and (-not $SkipZellijConfig)) {
+    $zjCmd2 = Get-Command zellij -ErrorAction SilentlyContinue
+    if (-not $zjCmd2) {
+        Write-Note 'live probe skipped - zellij is not on PATH'
+    } else {
+        # DOES ZELLIJ READ WHERE WE WROTE?
+        #
+        # This script writes Zellij's config under $env:APPDATA. ZELLIJ DOES NOT
+        # READ THAT VARIABLE: it resolves the roaming folder through the Windows
+        # known-folder API, so the two agree on an ordinary machine and diverge
+        # the instant anything redirects APPDATA - a corporate profile, a shell
+        # that sets it, or a test harness. Verified by setting $env:APPDATA to a
+        # temp directory and asking: `zellij setup --check` still reported the
+        # real path.
+        #
+        # Divergence is silent and total. Every file this installer writes would
+        # land somewhere Zellij never looks, every check above would pass
+        # because it re-reads its own output at its own path, and the session
+        # would come up with no layout and no bar. Ask Zellij where it looks,
+        # rather than assuming it agrees.
+        $setupOut = & $zjCmd2.Source setup --check 2>&1 | Out-String
+        $cfgDirM  = [regex]::Match($setupOut, '\[CONFIG DIR\]:\s*"?([^"\r\n]+)"?')
+        if ($cfgDirM.Success) {
+            $zjSaysCfg = $cfgDirM.Groups[1].Value.Trim()
+            $weWroteTo = (Join-Path $env:APPDATA (Join-Path 'Zellij' 'config'))
+            $sameDir = ($zjSaysCfg.TrimEnd('\') -eq $weWroteTo.TrimEnd('\'))
+            Test-ZtClaim 'Zellij reads where this wrote' $sameDir (
+                "Zellij reads its config from '$zjSaysCfg' but this installer wrote to " +
+                "'$weWroteTo'. APPDATA is redirected in this shell; Zellij resolves the " +
+                'roaming folder through the known-folder API and ignores the variable')
+        }
+
+        $probeName = 'zt-verify-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        $probeDir  = Join-Path $env:TEMP $probeName
+        New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+        $probeProc = $null
+
+        try {
+            $probeProc = Start-Process -FilePath $zjCmd2.Source -ArgumentList '-s', $probeName `
+                -NoNewWindow -PassThru `
+                -RedirectStandardOutput (Join-Path $probeDir 'o.txt') `
+                -RedirectStandardError  (Join-Path $probeDir 'e.txt')
+
+            # Poll rather than sleep a fixed time: a cold Zellij start is slow
+            # the first time and quick afterwards, and a fixed wait is either a
+            # flaky check or a slow install.
+            $up = $false
+            for ($i = 0; $i -lt 20; $i++) {
+                Start-Sleep -Milliseconds 500
+                $listed = @(& zellij list-sessions --no-formatting --short 2>$null)
+                if ($listed -contains $probeName) { $up = $true; break }
+            }
+
+            if (-not $up) {
+                $probeErr = Get-Content -LiteralPath (Join-Path $probeDir 'e.txt') -Raw -ErrorAction SilentlyContinue
+                Test-ZtClaim 'a session starts from this config' $false (
+                    'the probe session never appeared. ' + ($probeErr -replace '\s+', ' '))
+            } else {
+                $liveLayout = & zellij --session $probeName action dump-layout 2>&1 | Out-String
+                if (-not $liveLayout) { $liveLayout = '' }
+
+                # Compare the LIVE session against the path the DEPLOYED layout
+                # names. Anything else compares the file with itself.
+                $wantPlugin = ''
+                if ($layDst2 -and (Test-Path -LiteralPath $layDst2)) {
+                    $wantMatch = [regex]::Match((Get-Content -LiteralPath $layDst2 -Raw), 'location="file:([^"]+)"')
+                    if ($wantMatch.Success) { $wantPlugin = $wantMatch.Groups[1].Value }
+                }
+
+                Test-ZtClaim 'a session starts from this config' ($liveLayout -match 'tab name=') (
+                    'the session came up but reported no tabs')
+
+                # ONLY WHEN THE PLUGIN IS ACTUALLY THERE. A layout naming a wasm
+                # that does not exist produces a session with NO PLUGIN PANE AT
+                # ALL - observed here, not assumed: the probe reported the pane
+                # missing on a profile that had never downloaded zjstatus, while
+                # the identical check passes on one that has. That is a fair
+                # description of the machine and a wrong thing to fail an
+                # install over, because this installer deliberately does not
+                # download the plugin and says so.
+                #
+                # It also means the absence of the pane is a real signal once
+                # the wasm IS present, which is the case worth failing on.
+                $wantFs = $wantPlugin -replace '/', '\'
+                if ($wantPlugin -and (Test-Path -LiteralPath $wantFs)) {
+                    Test-ZtClaim 'the session carries the status bar' (
+                        $liveLayout -match [regex]::Escape($wantPlugin)) (
+                        "the live session does not contain a plugin pane for $wantPlugin")
+                } elseif ($wantPlugin) {
+                    Write-Note 'status bar pane not checked - the plugin is not downloaded yet'
+                }
+            }
+        } catch {
+            Test-ZtClaim 'a session starts from this config' $false $_.Exception.Message
+        } finally {
+            # Always, whatever happened above. A stray session would be
+            # resurrectable, and this project has just spent an evening on what
+            # a stray resurrectable session does to you.
+            if ($probeProc -and -not $probeProc.HasExited) {
+                $probeProc.Kill()
+                $probeProc.WaitForExit(3000) | Out-Null
+            }
+            & zellij delete-session $probeName --force 2>&1 | Out-Null
+            $stillThere = @(& zellij list-sessions --no-formatting --short 2>$null) -contains $probeName
+            Test-ZtClaim 'the probe session was removed' (-not $stillThere) (
+                "$probeName is still listed - remove it with: zellij delete-session $probeName --force")
+            Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        # THE GRANT MUST SURVIVE A ZELLIJ ROUND TRIP. The server holds
+        # permission state in memory and writes its own copy out when it exits,
+        # so a grant it could not parse is silently dropped - and the file this
+        # installer wrote minutes ago would be gone with no error. Re-reading it
+        # after a real server has started and stopped is the only way to know
+        # the format is one Zellij actually accepts.
+        if ($permPath -and $permKey) {
+            $afterText = ''
+            if (Test-Path -LiteralPath $permPath) {
+                $afterText = Get-Content -LiteralPath $permPath -Raw
+                if (-not $afterText) { $afterText = '' }
+            }
+            Test-ZtClaim 'the grant survives Zellij rewriting it' (
+                $afterText -match [regex]::Escape($permKey)) (
+                'Zellij dropped the grant when its server exited, which means it could not ' +
+                'read the entry this installer wrote')
+        }
+    }
 }
 
 if ($verified -and $problems.Count -eq 0) {

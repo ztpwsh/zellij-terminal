@@ -52,6 +52,18 @@ changes nothing however many times you do it. A killed session resurrects too;
 only `delete-session` clears it. `zt check` warns when any exited session is
 still listed.
 
+**Zellij ignores `%APPDATA%`.** It resolves the roaming folder through the
+Windows known-folder API, so redirecting that environment variable moves where
+`install.ps1` *writes* and not where Zellij *reads*. On an ordinary machine the
+two are the same directory and none of this matters; where something redirects
+it — a corporate profile, a shell that sets it, a test harness — every file the
+installer writes lands somewhere Zellij never looks, and the session comes up
+with no layout and no bar while every file check passes, because each one
+re-reads its own output at its own path. `install.ps1` now asks
+`zellij setup --check` where it reads and fails if that disagrees with where it
+wrote. Verified by pointing `$env:APPDATA` at a temp directory: `setup --check`
+still reported the real path.
+
 **When `zt check` is clean and the rig still does not work**, run `zt diag`. It
 writes one file describing what is actually on the machine — the layer check
 asks whether each file is *there*, and the two files that decide whether this rig

@@ -88,7 +88,7 @@ BeforeAll {
 `$env:LOCALAPPDATA = '$($Profile_.LocalAppData)'
 & '$(Join-Path $script:RepoRoot 'install.ps1')' ``
     -ModulePath '$(Join-Path $Profile_.Root 'Modules')' ``
-    -SkipHook -SkipZellijCheck -SkipServerCheck -Force *> '$log'
+    -SkipHook -SkipZellijCheck -SkipServerCheck -SkipLiveProbe -Force *> '$log'
 exit `$LASTEXITCODE
 "@
         & pwsh -NoProfile -File $runner | Out-Null

@@ -111,7 +111,7 @@ BeforeAll {
 `$env:LOCALAPPDATA = '$($Sandbox.LocalAppData)'
 & '$(Join-Path $script:RepoRoot 'install.ps1')' ``
     -ModulePath '$(Join-Path $Sandbox.Root 'Modules')' ``
-    -SkipHook -SkipZellijCheck -Force $guard *> '$log'
+    -SkipHook -SkipZellijCheck -SkipLiveProbe -Force $guard *> '$log'
 exit `$LASTEXITCODE
 "@
         & pwsh -NoProfile -File $runner | Out-Null
