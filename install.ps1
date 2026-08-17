@@ -46,7 +46,17 @@ param(
     [switch]$InstallZellij,
 
     # Do not look for Zellij at all.
-    [switch]$SkipZellijCheck
+    [switch]$SkipZellijCheck,
+
+    # Write the zjstatus permission grant even though a Zellij server is
+    # running. The refusal exists because the server rewrites that file when it
+    # exits, so a grant written underneath a live session is undone minutes
+    # later - but the check is a process check, and a process is only a proxy
+    # for the real question, which is whether that server shares THIS profile.
+    # It does not when %LOCALAPPDATA% is redirected, which is how the test
+    # suite runs the installer, and it need not when you are about to delete
+    # every session anyway.
+    [switch]$SkipServerCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -292,13 +302,19 @@ if (-not $SkipZellijConfig) {
     # --- the plugin permission grant ----------------------------------------
     #
     # ZELLIJ GATES PLUGINS BEHIND A PERMISSION, AND THIS RIG CANNOT ANSWER THE
-    # PROMPT. Without a grant, zjstatus loads and is held pending approval, and
-    # the approval prompt renders IN THE PLUGIN'S OWN PANE - which the layout
-    # declares as `pane size=1 borderless=true`. A dialog cannot draw in one
-    # row, and the session starts in locked mode, so no keystroke reaches that
-    # pane to accept it either. The result is no bar, no prompt, no error, and
-    # nothing in any log, on a machine where every file this installer writes is
-    # provably correct.
+    # PROMPT IN PRACTICE. Without a grant, zjstatus loads and is held pending
+    # approval. The prompt DOES render - as a single line across the top row,
+    # "This plugin asks permission to: ... Allow? (y/n)", perfectly legible.
+    # What it cannot get is the keypress: the session starts in locked mode
+    # with focus in the terminal pane below, so `y` goes to whatever is running
+    # there rather than to the plugin. It reads as a banner rather than a
+    # question, and it sits unanswered forever.
+    #
+    # An earlier version of this comment claimed the dialog could not draw in
+    # one row. That was wrong, and it was wrong in eight files: a screenshot
+    # from the machine this was diagnosed on shows it rendering fine. The
+    # failure is input, not output, and the distinction matters to anyone
+    # trying to answer it by hand.
     #
     # It went unnoticed for months because the grant is acquired INTERACTIVELY,
     # once, and then lives in a cache directory outside both the clone and
@@ -326,9 +342,6 @@ if (-not $SkipZellijConfig) {
     ) -join [Environment]::NewLine
 
     if ($PSCmdlet.ShouldProcess($permPath, 'Grant zjstatus its Zellij plugin permissions')) {
-        if (-not (Test-Path -LiteralPath $permDir)) {
-            New-Item -ItemType Directory -Path $permDir -Force | Out-Null
-        }
 
         $permText = ''
         if (Test-Path -LiteralPath $permPath) {
@@ -336,35 +349,77 @@ if (-not $SkipZellijConfig) {
             if (-not $permText) { $permText = '' }
         }
 
-        # MERGE, never replace. This file is Zellij's and can hold grants for
-        # other plugins the user has approved by hand; dropping those would
-        # silently revoke them and produce this same invisible failure
-        # somewhere else. Drop only a previous entry for THIS path, so a
-        # re-install re-states the grant instead of accumulating duplicates.
-        $escaped = [regex]::Escape('"' + $permKey + '"')
-        $permNew = [regex]::Replace($permText, '(?ms)^[ \t]*' + $escaped + '[ \t]*\{.*?\}[ \t]*\r?\n?', '')
-        $permNew = $permNew.TrimEnd()
-        if ($permNew -ne '') { $permNew = $permNew + [Environment]::NewLine }
-        $permNew = $permNew + $permBody + [Environment]::NewLine
+        # ALREADY GRANTED IS THE FIRST QUESTION, and it is asked before the
+        # server check below, because a machine that is already correct must
+        # not be told to close its sessions for a write that would change
+        # nothing. Matched on the key rather than the whole block: ZELLIJ
+        # REWRITES THIS FILE IN ITS OWN ORDER. Observed - the installer writes
+        # Read, Change, Run and the file came back Change, Run, Read, which is
+        # how we know the server owns it rather than us.
+        $alreadyGranted = $false
+        if ($permText -and ($permText -match [regex]::Escape('"' + $permKey + '"'))) {
+            $alreadyGranted = $true
+        }
 
-        if ($permText.Trim() -eq $permNew.Trim()) {
+        # THE ZELLIJ SERVER OWNS THIS FILE WHILE IT RUNS. It holds its
+        # permission state in memory and writes its own copy back when it
+        # exits, so a grant written underneath a live session is replaced by
+        # the state that session started with - and the repair silently undoes
+        # itself minutes later, which is indistinguishable from it never having
+        # worked.
+        #
+        # THIS CHECK USED TO RUN AFTER THE WRITE, as a warning. That is the
+        # wrong order and it is worse than useless: by the time it printed, the
+        # file was already on disk and already doomed, and the message read as
+        # advice about next time rather than as a statement that this run had
+        # just failed. It refuses now, records a problem so the closing banner
+        # cannot say "Done", and names the fix.
+        $zjProc = @()
+        if (-not $SkipServerCheck) {
+            $zjProc = @(Get-Process -Name 'zellij' -ErrorAction SilentlyContinue)
+        }
+
+        if ($alreadyGranted) {
             Write-Note "$permPath (already granted)"
+        } elseif ($zjProc.Count -gt 0) {
+            Write-Warn "NOT granted: a zellij server is running ($($zjProc.Count) process(es))."
+            Write-Warn 'It rewrites this file when it exits, so writing now would be undone.'
+            Write-Warn ''
+            Write-Warn '  zellij delete-session <name> --force     for every session listed by'
+            Write-Warn '  zellij list-sessions                     then re-run this installer'
+            Write-Warn ''
+            Write-Warn 'DELETE, not kill. A killed session stays resurrectable, and'
+            Write-Warn '`attach --create` resurrects it rather than reading the layout - so'
+            Write-Warn 'the grant is never re-evaluated and the status bar never appears.'
+            $problems += ('zjstatus was not granted its Zellij permission, because a zellij ' +
+                          'server is running and would overwrite it. Close every session with ' +
+                          'delete-session and re-run; until then there is no status bar.')
         } else {
+            if (-not (Test-Path -LiteralPath $permDir)) {
+                New-Item -ItemType Directory -Path $permDir -Force | Out-Null
+            }
+
+            # MERGE, never replace. This file is Zellij's and can hold grants
+            # for other plugins the user has approved by hand; dropping those
+            # would silently revoke them and produce this same invisible
+            # failure somewhere else. Drop only a previous entry for THIS path,
+            # so a re-install re-states the grant instead of accumulating
+            # duplicates.
+            $escaped = [regex]::Escape('"' + $permKey + '"')
+            $permNew = [regex]::Replace($permText, '(?ms)^[ \t]*' + $escaped + '[ \t]*\{.*?\}[ \t]*\r?\n?', '')
+            $permNew = $permNew.TrimEnd()
+            if ($permNew -ne '') { $permNew = $permNew + [Environment]::NewLine }
+            $permNew = $permNew + $permBody + [Environment]::NewLine
+
             if ($permText -ne '') {
                 Copy-Item -LiteralPath $permPath -Destination "$permPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak" -Force
             }
             Set-Content -LiteralPath $permPath -Value $permNew -Encoding UTF8
             Write-Note "$permPath (zjstatus granted)"
-        }
 
-        # THE ZELLIJ SERVER OWNS THIS FILE WHILE IT RUNS and writes its own
-        # copy back out, so a grant written underneath a live session can be
-        # replaced by the state that session started with. Say so rather than
-        # letting the fix appear not to have worked.
-        $zjProc = @(Get-Process -Name 'zellij' -ErrorAction SilentlyContinue)
-        if ($zjProc.Count -gt 0) {
-            Write-Warn 'A zellij server is running and rewrites this file when it exits.'
-            Write-Warn 'Close every session, then re-run, or the grant may be overwritten.'
+            # A grant is read when a session STARTS. An existing session -
+            # including an exited one, which resurrects - will not pick this up.
+            Write-Note 'a session already running will not see this: delete it, do not kill it'
         }
     }
 

@@ -625,7 +625,20 @@ Invoke-Section 'zellij' {
 
     Add-Line ''
     Add-Line '### Sessions, clients, tabs'
-    Add-Probe 'zellij' @('list-sessions') | Out-Null
+    $sess = Add-Probe 'zellij' @('list-sessions')
+
+    # An exited session is not gone: `session_serialization true` keeps it
+    # resurrectable, and `attach --create` resurrects rather than reading the
+    # layout. Every layout edit and every plugin permission granted since is
+    # then invisible, and a reinstall cannot help. This is why a machine with a
+    # provably correct grant on disk still had no status bar.
+    $exitedRows = @($sess.Output -split "`r?`n" | Where-Object { $_ -match 'EXITED' })
+    Add-Fact 'Resurrectable (EXITED) sessions' $exitedRows.Count
+    if ($exitedRows.Count -gt 0) {
+        Add-Signal ($exitedRows.Count.ToString() + ' exited session(s) are still resurrectable. ' +
+                    '`attach --create` reuses one instead of building from the layout, so layout and ' +
+                    'plugin-permission changes are never read. Clear with delete-session, not kill-session.')
+    }
 
     $clients = Add-Probe 'zellij' @('--session', $Session, 'action', 'list-clients')
     $rows = @([regex]::Matches($clients.Output, '(?m)^\d+\s'))
@@ -879,10 +892,11 @@ Invoke-Section 'plugin' {
     # THE QUESTION THIS SECTION USED TO STOP ONE DIRECTORY SHORT OF. Zellij
     # gates plugins behind a permission grant kept in its CACHE directory,
     # under %LOCALAPPDATA% - not under %APPDATA%, which is all this section
-    # listed. Without a grant the plugin loads and waits for an approval prompt
-    # that renders in its own pane: one row, borderless, in a session that
-    # starts locked. Nothing can draw or answer there, so the bar is absent
-    # with no prompt, no error and nothing in any log.
+    # listed. Without a grant the plugin loads and waits for approval. The
+    # prompt renders as a single line across the top row; what it never gets is
+    # the keypress, because the session starts locked with focus in the
+    # terminal pane, so it sits unanswered and reads as a banner. The bar is
+    # absent and nothing is logged.
     #
     # It is acquired interactively and once, which is why every development
     # machine had one and nothing that ships did. A bundle from a machine with
@@ -914,7 +928,7 @@ Invoke-Section 'plugin' {
         Add-Fact 'Granted' ($key + '  -- ' + $granted)
         if (-not $granted) {
             Add-Signal ('Zellij has no permission grant for ' + $key +
-                        ' - the plugin loads and waits for an approval prompt that cannot be shown in a one-row locked pane, so the bar is absent with no error. This is the failure a clean `zt check` cannot see.')
+                        ' - the plugin waits on an approval prompt that renders in the one-row bar but cannot be answered from a locked session, so the bar never appears and nothing is logged. This is the failure a clean `zt check` cannot see.')
         }
     }
 

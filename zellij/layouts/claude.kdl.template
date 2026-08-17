@@ -53,12 +53,14 @@ layout {
     // into %APPDATA%\Zellij\data\plugins\ . Verified with v0.24.0.
     //
     // AND GRANT IT PERMISSION. Zellij holds an ungranted plugin pending
-    // approval and draws the prompt IN THIS PANE - which is one row,
-    // borderless, in a session that starts locked, so the dialog cannot render
-    // and no keystroke reaches it to accept. The bar is then absent with no
-    // prompt, no error and nothing logged, on a machine where this file and
-    // the wasm are both correct. install.ps1 writes the grant to
-    // %LOCALAPPDATA%\Zellij\cache\permissions.kdl; `zt check` reports it.
+    // approval and draws the prompt IN THIS PANE, as a single line reading
+    // "This plugin asks permission to: ... Allow? (y/n)". It renders fine.
+    // What it never receives is the keypress: the session starts locked with
+    // focus in the terminal pane below, so `y` goes there instead, and the
+    // prompt sits unanswered looking like a banner. install.ps1 writes the
+    // grant to %LOCALAPPDATA%\Zellij\cache\permissions.kdl; `zt check`
+    // reports it. A grant is read when a session STARTS, so an existing
+    // session must be DELETED, not killed - a killed one resurrects.
     //
     // Delete this whole default_tab_template block if you don't want it - the
     // flag files and key 3 work fine without a status bar.

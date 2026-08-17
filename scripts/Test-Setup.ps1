@@ -177,6 +177,27 @@ if ($zellij) {
         Add-Result '3 transport' "Session '$Session'" 'FAIL' "Start it: zellij attach --create $Session"
     }
 
+    # RESURRECTABLE SESSIONS ARE WHY A REPAIR APPEARS NOT TO WORK.
+    # `session_serialization true` is set deliberately in config.kdl, so a
+    # session that exits stays in the list and `attach --create` RESURRECTS it
+    # from its serialized state rather than building a new one from the layout.
+    # A layout rewritten since, or a plugin permission granted since, is
+    # therefore never read - and reinstalling changes nothing, however many
+    # times you do it.
+    #
+    # That cost most of a night on a second machine: the grant was correct on
+    # disk and every session started was a corpse that could not see it. The
+    # fix is delete-session, not kill-session, and nothing in this rig said so.
+    $exited = @($sessions -split "`r?`n" | Where-Object { $_ -match 'EXITED' })
+    if ($exited.Count -gt 0) {
+        Add-Result '3 transport' 'Resurrectable sessions' 'WARN' (
+            "$($exited.Count) exited session(s) still listed. ``attach --create`` resurrects one " +
+            'rather than reading the layout, so config and plugin-permission changes are ignored. ' +
+            'Clear with: zellij delete-session <name> --force')
+    } else {
+        Add-Result '3 transport' 'Resurrectable sessions' 'PASS' 'None - a new session will be built from the layout'
+    }
+
     $tabs = @(
         & zellij --session $Session action query-tab-names 2>$null |
             ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
@@ -543,11 +564,12 @@ if (Test-Path -LiteralPath $zjLayout) {
             Add-Result '4 hooks' 'zjstatus plugin' 'FAIL' "Layout references zjstatus but $wasm is missing"
         }
 
-        # A PLUGIN THAT IS PRESENT IS NOT A PLUGIN THAT MAY RUN. Zellij holds an
-        # ungranted plugin pending approval and renders the prompt in the
-        # plugin's own pane - one row, borderless, in a session that starts
-        # locked. The dialog cannot draw there and no keystroke reaches it, so
-        # the bar is simply absent: no prompt, no error, nothing logged.
+        # A PLUGIN THAT IS PRESENT IS NOT A PLUGIN THAT MAY RUN. Zellij holds
+        # an ungranted plugin pending approval. The prompt renders - a single
+        # line across the top row, "Allow? (y/n)" - but the session starts in
+        # locked mode with focus in the terminal pane, so the keypress never
+        # reaches the plugin and it sits unanswered. It reads as a banner
+        # rather than a question. The bar is absent, and nothing is logged.
         #
         # This check exists because every other line in this table passed on a
         # machine with no status bar. The grant is acquired interactively and
@@ -567,13 +589,15 @@ if (Test-Path -LiteralPath $zjLayout) {
                 Add-Result '4 hooks' 'zjstatus permitted' 'PASS' 'Zellij has a plugin permission grant for it'
             } else {
                 Add-Result '4 hooks' 'zjstatus permitted' 'FAIL' (
-                    "No grant for $permKey in $permPath - the plugin loads and waits for " +
-                    'an approval prompt that cannot be shown in a one-row pane. Fix: re-run install.ps1')
+                    "No grant for $permKey in $permPath - the plugin waits on a prompt that " +
+                    'cannot be answered from a locked session. Fix: close every session with ' +
+                    'delete-session, then re-run install.ps1')
             }
         } else {
             Add-Result '4 hooks' 'zjstatus permitted' 'FAIL' (
                 "$permPath does not exist, so no plugin is permitted to run - the bar " +
-                'will be absent with no prompt and no error. Fix: re-run install.ps1')
+                'will be absent with no prompt and no error. Fix: close every session with ' +
+                'delete-session, then re-run install.ps1')
         }
     }
 } else {

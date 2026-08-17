@@ -9,11 +9,19 @@
       status bar.
 
       Zellij gates plugins behind a permission. Ungranted, zjstatus loads and is
-      held pending approval, and the approval prompt renders IN THE PLUGIN'S OWN
-      PANE - which the layout declares as `pane size=1 borderless=true`, in a
-      session that starts in locked mode. A dialog cannot draw in one row and no
-      keystroke reaches that pane to accept it, so the outcome is no bar, no
-      prompt, no error, and nothing in any log.
+      held pending approval, and the prompt renders IN THE PLUGIN'S OWN PANE -
+      which the layout declares as `pane size=1 borderless=true`. It renders
+      perfectly well, as a single line reading "This plugin asks permission to:
+      ... Allow? (y/n)"; a screenshot from the machine this was diagnosed on
+      settles that. What it never receives is the KEYPRESS: the session starts
+      in locked mode with focus in the terminal pane below, so `y` goes there
+      instead. The prompt sits unanswered, reads as a banner rather than a
+      question, and the outcome is no bar, no error, and nothing in any log.
+
+      The first version of this file said the dialog could not be drawn at all.
+      It was wrong, and it was wrong in eight places, which is its own lesson:
+      an explanation invented to fit a symptom will fit it just as well as the
+      true one until somebody photographs the screen.
 
       The grant is acquired interactively, once, and cached in
       %LOCALAPPDATA%\Zellij\cache\permissions.kdl - outside the clone, outside
@@ -40,6 +48,11 @@
     Green on a machine with no Zellij: -SkipZellijCheck, and the grant is a
     statement about a path rather than about a file that has to exist.
 #>
+
+# Discovery scope. Pester evaluates -Skip while discovering, before any
+# BeforeAll has run, so this cannot live in setup. The refusal case needs a
+# server to refuse for, and a CI runner has no Zellij at all.
+$NoZellijServer = @(Get-Process -Name 'zellij' -ErrorAction SilentlyContinue).Count -eq 0
 
 BeforeAll {
     $script:RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -77,7 +90,19 @@ BeforeAll {
             them through two parsers is how a test starts asserting about its
             own escaping.
         #>
-        param($Sandbox)
+        param($Sandbox, [switch]$KeepServerCheck)
+
+        # -SkipServerCheck by default. The installer refuses to write the grant
+        # while a zellij process exists, because the server rewrites that file
+        # on exit - correct behaviour that would otherwise make this suite pass
+        # or fail depending on whether the person running it happens to have a
+        # session open. The redirected profile means no running server shares
+        # this cache directory, so the refusal is guarding nothing here.
+        #
+        # The refusal itself is covered below, on a machine that has a server
+        # to refuse for.
+        $guard = '-SkipServerCheck'
+        if ($KeepServerCheck) { $guard = '' }
 
         $runner = Join-Path $Sandbox.Root 'run.ps1'
         $log    = Join-Path $Sandbox.Root 'install.log'
@@ -86,7 +111,7 @@ BeforeAll {
 `$env:LOCALAPPDATA = '$($Sandbox.LocalAppData)'
 & '$(Join-Path $script:RepoRoot 'install.ps1')' ``
     -ModulePath '$(Join-Path $Sandbox.Root 'Modules')' ``
-    -SkipHook -SkipZellijCheck -Force *> '$log'
+    -SkipHook -SkipZellijCheck -Force $guard *> '$log'
 exit `$LASTEXITCODE
 "@
         & pwsh -NoProfile -File $runner | Out-Null
@@ -213,6 +238,51 @@ Describe 'The plugin permission grant' {
         # Deliberately not matched against an exact Join-Path spelling: that
         # asserts about formatting, and the first draft of this test went red
         # over an argument nesting that changed nothing.
+
+        It 'checks for a running server BEFORE writing, not after' {
+            # The order is the whole point. As a warning after the write, the
+            # message printed while the file was already on disk and already
+            # doomed - it read as advice about next time rather than as a
+            # statement that this run had just failed. The server holds its
+            # permission state in memory and writes its own copy back on exit.
+            #
+            # That it rewrites the file is observed, not assumed: the installer
+            # writes Read, Change, Run and the file came back Change, Run,
+            # Read on the machine this was diagnosed on.
+            $procCheck = $script:Install.IndexOf("Get-Process -Name 'zellij'")
+            $write     = $script:Install.IndexOf('Set-Content -LiteralPath $permPath')
+
+            $procCheck | Should -BeGreaterThan 0 -Because 'the server check has to exist'
+            $write     | Should -BeGreaterThan 0 -Because 'the grant has to be written somewhere'
+            $procCheck | Should -BeLessThan $write -Because (
+                'checking after the write is a warning about a file that is already doomed')
+        }
+
+        It 'refuses to write while a zellij server is running, and says why' -Skip:$NoZellijServer {
+            # Only meaningful where there is a server to refuse for. Skipped on
+            # CI, which has no Zellij, and on any desktop with no session open -
+            # so it is a bonus assertion on the machines that can make it,
+            # never a gate that depends on the tester's window layout.
+            $sb = New-ZtSandbox
+            $log = Invoke-ZtInstallInSandbox $sb -KeepServerCheck
+            $text = Get-Content -LiteralPath $log -Raw
+
+            $sb.Permissions | Should -Not -Exist -Because (
+                'writing under a live server is undone when that server exits, so not ' +
+                'writing is the honest outcome')
+            $text | Should -Match 'NOT granted'
+            $text | Should -Match 'delete-session' -Because 'a refusal has to name the way out'
+        }
+
+        It 'tells you to DELETE the session, never to kill it' {
+            # A killed session stays resurrectable and `attach --create`
+            # resurrects it without reading the layout, so the grant is never
+            # re-evaluated. Every route out of this failure goes through
+            # delete-session, and saying "restart your session" sends people
+            # round the loop that cost a night.
+            $script:Install | Should -Match 'delete-session'
+            $script:Check   | Should -Match 'delete-session'
+        }
 
         It 'install.ps1 writes the grant under the Zellij cache directory' {
             $script:Install | Should -Match 'permissions\.kdl'

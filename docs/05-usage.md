@@ -154,15 +154,18 @@ without it.
 is the failure everyone hits first.
 
 **Zellij must also be told the plugin may run.** It gates plugins behind a
-permission grant, and an ungranted plugin loads and then waits for an approval
-prompt that renders *in the plugin's own pane* — which here is one row,
-borderless, in a session that starts locked. Nothing can draw or answer there,
-so you get no bar, no prompt, no error and nothing in any log, on a machine
-where every file is correct. `install.ps1` writes the grant to
-`%LOCALAPPDATA%\Zellij\cache\permissions.kdl`, so re-run it after downloading
-the plugin; `zt check` reports it as **zjstatus permitted**. Close every session
-first — the Zellij server owns that file while it runs and writes its own copy
-back when it exits.
+permission grant. Ungranted, zjstatus is held pending approval and the prompt
+renders as one line across the top row — `Allow? (y/n)` — but the session starts
+in locked mode with focus in the terminal pane, so the keypress never reaches
+the plugin. It sits there unanswered looking like a banner, and you get no bar,
+no error and nothing in any log on a machine where every file is correct.
+
+`install.ps1` writes the grant to `%LOCALAPPDATA%\Zellij\cache\permissions.kdl`,
+so re-run it after downloading the plugin. Close every session **with
+`delete-session`** first: the Zellij server rewrites that file when it exits, and
+a merely killed session resurrects on the next `attach --create` without ever
+reading the layout or the grant. `zt check` reports the grant as **zjstatus
+permitted**, and warns while any exited session is still resurrectable.
 
 ### 5. Wire the pad
 

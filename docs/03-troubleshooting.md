@@ -18,14 +18,39 @@ different fixes.
 **No status bar, and everything checks out.** Zellij gates plugins behind a
 permission grant kept in `%LOCALAPPDATA%\Zellij\cache\permissions.kdl` — not in
 the clone, not under `%APPDATA%`, and acquired *interactively* the first time a
-plugin loads. Without it zjstatus loads and waits for an approval prompt that
-renders in its own pane: one row, borderless, in a session that starts locked.
-Nothing can draw or answer there, so the bar is simply absent — no prompt, no
-error, nothing logged — while the layout, the plugin binary and the config are
-all provably correct. This cost a day on a second PC whose `zt check` reported
-"No failures" on every line. Re-run `install.ps1` with every session closed; the
-Zellij server owns that file while it runs. `zt check` now reports it as
-**zjstatus permitted**.
+plugin loads. Without it zjstatus is held pending approval. The prompt does
+render — one line across the top row, `This plugin asks permission to: … Allow?
+(y/n)` — but the session starts in **locked** mode with focus in the terminal
+pane, so `y` goes to whatever is running there and never reaches the plugin. It
+looks like a banner rather than a question and sits unanswered, so the bar never
+appears and nothing is logged, while the layout, the plugin binary and the
+config are all provably correct. `zt check` reported "No failures" on every line
+of the machine this was found on.
+
+The fix, in this order, and the order is the whole difference:
+
+```powershell
+zellij list-sessions
+zellij delete-session <name> --force     # every one of them
+.\install.ps1                            # writes the grant
+zac
+```
+
+**`delete-session`, not `kill-session`** — see the next entry. And the installer
+refuses to write the grant while a Zellij server is running, because the server
+holds its permission state in memory and writes its own copy back when it exits,
+undoing anything written underneath it. That it rewrites the file is observable:
+the installer writes the three permissions in a fixed order and Zellij hands
+them back in a different one.
+
+**A repair that keeps not taking effect.** `session_serialization true` is set
+deliberately in `config.kdl`, so an exited session stays in `zellij
+list-sessions` and `attach --create` **resurrects** it rather than building a new
+one from the layout. Everything changed since — a rewritten layout, a plugin
+permission granted, a config edit — is therefore never read, and reinstalling
+changes nothing however many times you do it. A killed session resurrects too;
+only `delete-session` clears it. `zt check` warns when any exited session is
+still listed.
 
 **When `zt check` is clean and the rig still does not work**, run `zt diag`. It
 writes one file describing what is actually on the machine — the layer check
