@@ -345,6 +345,29 @@ if ($registeredIn.Count -gt 0) {
     Add-Result '4 hooks' 'Hook registered' 'FAIL' 'No claude-zj-hook entry in user or project settings.json'
 }
 
+# A registration is not the same as a WORKING registration. The path is stamped
+# in at install time, so moving the clone, re-cloning somewhere else, or
+# deleting an old one leaves an entry pointing at a script that is not there -
+# and a hook whose file is missing fails per event, in the background, where
+# nobody is looking. The visible symptom is a tab glyph that never changes,
+# which reads as a zellij problem rather than a stale path.
+$stalePaths = @()
+foreach ($s in $registeredIn) {
+    $raw = Get-Content -LiteralPath $s -Raw
+    foreach ($m in ([regex]::Matches($raw, '"([^"]*claude-zj-hook[^"]*)"'))) {
+        $p = $m.Groups[1].Value
+        if (-not (Test-Path -LiteralPath $p)) { $stalePaths += $p }
+    }
+}
+$stalePaths = @($stalePaths | Sort-Object -Unique)
+if ($stalePaths.Count -gt 0) {
+    Add-Result '4 hooks' 'Hook path exists' 'FAIL' (
+        'registered hook script is not there: ' + ($stalePaths -join ' ; ') +
+        ' - re-run install.ps1 -Global from the clone you are actually using')
+} elseif ($registeredIn.Count -gt 0) {
+    Add-Result '4 hooks' 'Hook path exists' 'PASS' 'every registered hook path resolves to a file'
+}
+
 # PreToolUse/PostToolUse cost ~956 ms per tool call, measured. Warn loudly.
 foreach ($s in $registeredIn) {
     $raw = Get-Content -LiteralPath $s -Raw
@@ -532,6 +555,155 @@ if ($hookRaw) {
         Add-Result '4 hooks' 'Pipe is non-blocking' 'FAIL' 'Hook calls `& zellij ... pipe` and waits - this hangs Claude when zjstatus is loaded'
     } else {
         Add-Result '4 hooks' 'Pipe is non-blocking' 'PASS' 'Hook starts the pipe without waiting on it'
+    }
+}
+
+# ---------------------------------------------------------------------------
+#  Ctrl+V inside a pane
+# ---------------------------------------------------------------------------
+#  Zellij 0.44.3 on Windows never negotiates bracketed paste, so Windows
+#  Terminal types the clipboard in as ordinary keystrokes and every newline is
+#  Enter. In Claude Code that submits, so a ten-line paste becomes ten prompts.
+#
+#  NO ctrl+v ENTRY MEANS TERMINAL OWNS IT: ctrl+v -> paste is one of Terminal's
+#  built-in defaults, so silence here is the broken case, not the healthy one.
+#
+#  Mirrors Get-ZtWtCtrlVState and Get-ZtClaudeCtrlVState in
+#  module\ZellijTerminal\Public\Paste.ps1 - this script cannot import the module.
+#  tests\Paste.Tests.ps1 pins them together. Full write-up: docs B6.
+$pasteWt = @(
+    @(
+        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json')
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+)
+
+if ($pasteWt.Count -eq 0) {
+    Add-Result 'env' 'Paste (Ctrl+V)' 'INFO' 'Terminal settings.json not found - skipped'
+} else {
+    $termOwnsCtrlV = $true
+    $pasteRaw = Get-Content -LiteralPath $pasteWt[0] -Raw -ErrorAction SilentlyContinue
+    if ($pasteRaw) {
+        $pasteLive = ($pasteRaw -split "`r?`n" | Where-Object { $_.TrimStart() -notlike '//*' }) -join "`n"
+        $pasteHit  = [regex]::Match($pasteLive, '\{[^{}]*"keys"\s*:\s*"ctrl\+v"[^{}]*\}', 'IgnoreCase')
+        if ($pasteHit.Success) {
+            if (($pasteHit.Value -match '"id"\s*:\s*null') -or ($pasteHit.Value -match '"command"\s*:\s*"unbound"')) {
+                $termOwnsCtrlV = $false
+            }
+        }
+    }
+
+    $ccDir = $env:CLAUDE_CONFIG_DIR
+    if (-not $ccDir) { $ccDir = Join-Path $env:USERPROFILE '.claude' }
+    $ccKeys  = Join-Path $ccDir 'keybindings.json'
+    $ccBound = $false
+    if (Test-Path -LiteralPath $ccKeys) {
+        try {
+            $ccCfg = Get-Content -LiteralPath $ccKeys -Raw | ConvertFrom-Json
+            foreach ($grp in @($ccCfg.bindings)) {
+                if (-not $grp) { continue }
+                if ("$($grp.context)" -ne 'Chat') { continue }
+                if (-not $grp.bindings) { continue }
+                $names = $grp.bindings.PSObject.Properties.Name
+                if ($names -contains 'ctrl+v') {
+                    if ("$($grp.bindings.'ctrl+v')" -eq 'chat:imagePaste') { $ccBound = $true }
+                }
+            }
+        } catch { }
+    }
+
+    if ((-not $termOwnsCtrlV) -and $ccBound) {
+        Add-Result 'env' 'Paste (Ctrl+V)' 'PASS' 'Terminal leaves ctrl+v alone and Claude Code binds it'
+    } elseif ($termOwnsCtrlV -and (-not $ccBound)) {
+        Add-Result 'env' 'Paste (Ctrl+V)' 'WARN' 'Terminal owns ctrl+v - multi-line pastes shred inside Zellij. Fix: zt paste fix (alt+v works meanwhile)'
+    } elseif ($termOwnsCtrlV) {
+        Add-Result 'env' 'Paste (Ctrl+V)' 'WARN' 'Claude Code binds ctrl+v but Terminal still intercepts it first. Fix: zt paste fix'
+    } else {
+        Add-Result 'env' 'Paste (Ctrl+V)' 'WARN' 'Terminal ctrl+v is unbound but Claude Code has no ctrl+v, so nothing pastes there. Fix: zt paste fix'
+    }
+}
+
+# ---------------------------------------------------------------------------
+#  Nothing registered inside a git worktree
+# ---------------------------------------------------------------------------
+#  The release worktree is GENERATED: Publish-Release.ps1 empties it on every
+#  run and rebuilds it from the manifest. A session living there loses its files
+#  to the next publish and holds the directory open so the publish fails. Both
+#  have happened, which is why this is FAIL and not WARN.
+#
+#  Read `git worktree list` rather than hard-coding a path - the worktree's
+#  location is not a constant and has moved at least once.
+$repoRoot = $null
+try { $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path } catch { }
+
+$wtPaths = @()
+if ($repoRoot) {
+    $wtRaw = & git -C $repoRoot worktree list --porcelain 2>$null
+    if ($LASTEXITCODE -eq 0 -and $wtRaw) {
+        foreach ($line in @($wtRaw)) {
+            if ("$line" -match '^worktree\s+(.+)$') { $wtPaths += $Matches[1] }
+        }
+    }
+}
+
+function Get-ZtNormPath {
+    param([string]$Path)
+    if (-not $Path) { return '' }
+    return (($Path -replace '/', '\').TrimEnd('\')).ToLowerInvariant()
+}
+
+if ($wtPaths.Count -le 1) {
+    # One entry is the repo itself; none means git was unavailable. Either way
+    # there is no generated worktree on this machine to fall into.
+    Add-Result 'env' 'Release worktree' 'PASS' 'No extra git worktree registered on this device'
+} else {
+    $mainWt  = Get-ZtNormPath $wtPaths[0]
+    $genWts  = @($wtPaths | ForEach-Object { Get-ZtNormPath $_ } | Where-Object { $_ -and $_ -ne $mainWt })
+
+    # Everything this device points at: registered workspaces, and any live
+    # session record. A live record is the urgent one - it means a session is
+    # open in there right now.
+    $suspect = @()
+
+    $devPath2 = Get-DeviceConfigPath
+    if (Test-Path -LiteralPath $devPath2) {
+        try {
+            $dev2 = Get-Content -LiteralPath $devPath2 -Raw | ConvertFrom-Json
+            foreach ($w in @($dev2.workspaces)) {
+                if ($w -and $w.path) { $suspect += [pscustomobject]@{ What = "workspace '$($w.id)'"; Path = $w.path } }
+            }
+        } catch { }
+    }
+
+    $liveBase2 = $env:LOCALAPPDATA
+    if (-not $liveBase2) { $liveBase2 = $env:TEMP }
+    $liveDir2 = Join-Path $liveBase2 'ZellijTerminal\live'
+    if (Test-Path -LiteralPath $liveDir2) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $liveDir2 -Filter '*.json' -File -ErrorAction SilentlyContinue)) {
+            try {
+                $rec = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
+                if ($rec -and $rec.cwd) { $suspect += [pscustomobject]@{ What = "LIVE SESSION in tab '$($rec.tab)'"; Path = $rec.cwd } }
+            } catch { }
+        }
+    }
+
+    $hits = @()
+    foreach ($s in $suspect) {
+        $p = Get-ZtNormPath $s.Path
+        foreach ($g in $genWts) {
+            if ($p -eq $g -or $p.StartsWith($g + '\')) {
+                $hits += "$($s.What) -> $($s.Path)"
+                break
+            }
+        }
+    }
+
+    if ($hits.Count -eq 0) {
+        Add-Result 'env' 'Release worktree' 'PASS' "$($genWts.Count) worktree(s), none registered or running"
+    } else {
+        Add-Result 'env' 'Release worktree' 'FAIL' (
+            "Inside a generated worktree, which the next publish empties: $($hits -join ' ; '). Close the session and unregister it")
     }
 }
 

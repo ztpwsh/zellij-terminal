@@ -33,7 +33,9 @@ param(
 
     # Register the hook in %USERPROFILE%\.claude instead of this repo, so it
     # fires for EVERY project rather than only this one. Merged into whatever is
-    # already in that file; your permissions and plugins are left alone.
+    # already in that file; your permissions and plugins are left alone, and so
+    # are any hooks in it that are not ours - only entries running
+    # claude-zj-hook.ps1 are replaced.
     [switch]$Global,
 
     # Replace an existing module junction that points somewhere else.
@@ -78,6 +80,49 @@ $MinZellij = [version]'0.44'
 function Write-Step { param([string]$Text) Write-Host "  $Text" -ForegroundColor Cyan }
 function Write-Note { param([string]$Text) Write-Host "    $Text" -ForegroundColor DarkGray }
 function Write-Warn { param([string]$Text) Write-Host "    $Text" -ForegroundColor Yellow }
+
+function Test-ZtOwnHookEntry {
+    <#
+        Is one entry of a Claude Code `hooks.<Event>` array OURS?
+
+        SECOND COPY of Test-ZtOwnHookEntry in
+        module/ZellijTerminal/Private/Core.ps1, which explains the reasoning.
+        It is duplicated rather than imported because this script runs BEFORE
+        the module is installed - creating the junction is its own job - and
+        under Windows PowerShell 5.1. tests/Hooks.Tests.ps1 pins the two
+        together; if the marker in one drifts from the other, install and
+        uninstall disagree about which entries belong to this rig, and the
+        visible result is either somebody else's hooks deleted or two zt hooks
+        firing per event.
+    #>
+    param($Entry)
+
+    if ($null -eq $Entry) { return $false }
+
+    # Every field here is optional in somebody else's hook. This script does not
+    # set StrictMode, but the module copy runs under 2.0 where reading an absent
+    # property throws - and the two have to CLASSIFY IDENTICALLY, so they are
+    # written identically rather than each being as loose as its own file allows.
+    $names = @()
+    try { $names = @($Entry.PSObject.Properties | ForEach-Object { $_.Name }) } catch { return $false }
+    if ($names -notcontains 'hooks') { return $false }
+
+    foreach ($h in @($Entry.hooks)) {
+        if ($null -eq $h) { continue }
+        $hn = @()
+        try { $hn = @($h.PSObject.Properties | ForEach-Object { $_.Name }) } catch { continue }
+
+        if (($hn -contains 'command') -and $h.command -and ($h.command -like '*claude-zj-hook*')) {
+            return $true
+        }
+        if ($hn -contains 'args') {
+            foreach ($a in @($h.args)) {
+                if ($a -and ($a -like '*claude-zj-hook*')) { return $true }
+            }
+        }
+    }
+    return $false
+}
 
 Write-Host ''
 Write-Host '  zt - Zellij workspace rig' -ForegroundColor Cyan
@@ -375,11 +420,56 @@ if (-not $SkipHook) {
             }
             if (-not $merged) { $merged = [pscustomobject]@{} }
 
-            # Replace the hooks key wholesale rather than merging event by event.
-            # A half-updated hooks block - some events pointing at an old clone -
-            # is worse than either state, and the backup covers the loss of any
-            # hooks that were there before.
-            $merged | Add-Member -NotePropertyName 'hooks' -NotePropertyValue $incoming.hooks -Force
+            # Replace OUR entries, event by event, and leave everybody else's
+            # alone. This used to replace the whole `hooks` key, on the reasoning
+            # that a half-updated block - some events still pointing at an old
+            # clone - is worse than either state. That reasoning is right about
+            # OUR entries and wrong about anybody else's: `hooks` is a shared
+            # key, so a user with a formatter hook or a plugin's hooks
+            # registered globally lost them to a zt install, silently, with only
+            # a timestamped .bak to recover from.
+            #
+            # Selecting ours by script name gets both: every zt entry goes,
+            # including one left at a path this clone has never been at, so a
+            # moved or re-cloned install replaces its old registration instead
+            # of firing twice.
+            $existing = $null
+            if ($merged.PSObject.Properties.Name -contains 'hooks') { $existing = $merged.hooks }
+
+            $events = @()
+            if ($existing) { $events += @($existing.PSObject.Properties.Name) }
+            $events += @($incoming.hooks.PSObject.Properties.Name)
+            $events = @($events | Select-Object -Unique)
+
+            $result      = [pscustomobject]@{}
+            $foreignKept = 0
+            $ourOldPaths = @()
+
+            foreach ($ev in $events) {
+                $keep = @()
+                if ($existing -and ($existing.PSObject.Properties.Name -contains $ev)) {
+                    foreach ($entry in @($existing.$ev)) {
+                        if (Test-ZtOwnHookEntry $entry) {
+                            foreach ($h in @($entry.hooks)) {
+                                foreach ($a in @($h.args)) {
+                                    if ($a -and ($a -like '*claude-zj-hook*')) { $ourOldPaths += $a }
+                                }
+                            }
+                        } else {
+                            $keep += $entry
+                            $foreignKept++
+                        }
+                    }
+                }
+                if ($incoming.hooks.PSObject.Properties.Name -contains $ev) {
+                    $keep += @($incoming.hooks.$ev)
+                }
+                if ($keep.Count -gt 0) {
+                    $result | Add-Member -NotePropertyName $ev -NotePropertyValue @($keep) -Force
+                }
+            }
+
+            $merged | Add-Member -NotePropertyName 'hooks' -NotePropertyValue $result -Force
 
             # Depth matters: autoMode.environment and permissions.allow nest
             # further than the default of 2, which would silently stringify them.
@@ -387,11 +477,39 @@ if (-not $SkipHook) {
 
             Write-Note $hookDst
             Write-Note 'GLOBAL: fires for every project on this machine, not just this repo'
+
+            # Say what was found, not just what was written. The installer used
+            # to announce the scope it had just used while never having read the
+            # file, so it reported "THIS repo only" on machines where zt was
+            # already registered globally - true about its own action, and
+            # actively misleading about the state of the machine.
+            if ($foreignKept -gt 0) {
+                Write-Note "$foreignKept hook entries here are not ours - left untouched"
+            }
+            $ourOldPaths = @($ourOldPaths | Select-Object -Unique)
+            $stale = @($ourOldPaths | Where-Object { $_ -notlike "*$($repo -replace '\\', '/')/hooks/*" })
+            if ($stale.Count -gt 0) {
+                Write-Note "replaced a previous zt registration pointing at: $($stale -join ', ')"
+            } elseif ($ourOldPaths.Count -gt 0) {
+                Write-Note 'zt was already registered globally here - re-stamped at the same path'
+            }
         } else {
             Set-Content -LiteralPath $hookDst -Value $hook -Encoding UTF8
             Write-Note $hookDst
             Write-Note 'this registers the hook for THIS repo only - re-run with'
             Write-Note '-Global to register it for every project instead'
+
+            # ...unless it is already global, in which case saying "THIS repo
+            # only" without qualification reads as "your other projects are not
+            # covered", which is the opposite of the truth.
+            $globalDst = Join-Path $HOME (Join-Path '.claude' 'settings.json')
+            if (Test-Path -LiteralPath $globalDst) {
+                $globalRaw = Get-Content -LiteralPath $globalDst -Raw -ErrorAction SilentlyContinue
+                if ($globalRaw -and ($globalRaw -like '*claude-zj-hook*')) {
+                    Write-Note 'NOTE: zt is ALREADY registered globally in'
+                    Write-Note "      $globalDst - every project is already covered"
+                }
+            }
         }
     }
 }

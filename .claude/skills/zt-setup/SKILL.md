@@ -206,9 +206,10 @@ agent's point of view looks like the command hanging and then everything after
 it failing. `-KeepSession` leaves the session alone, and is what you want
 whenever the uninstall is a step in a reinstall rather than the end of it.
 
-It restores the pre-install Zellij config, removes only the `hooks` key from
-`%USERPROFILE%\.claude\settings.json` rather than the file, and does not touch
-Zellij, PowerToys or the .NET SDK.
+It restores the pre-install Zellij config, removes only its own entries from the
+`hooks` key in `%USERPROFILE%\.claude\settings.json` — not the key, not the file
+— and does not touch Zellij, PowerToys or the .NET SDK. Hooks registered by
+anything else survive; the key goes only when nothing is left in it.
 
 Two things it removes that you have to *restore by hand* on a reinstall, because
 they are not part of `install.ps1`:

@@ -236,6 +236,21 @@ elseif ($hookEvent -eq 'SessionStart') {
     if (-not (Test-Path -LiteralPath $liveDir)) {
         New-Item -ItemType Directory -Path $liveDir -Force | Out-Null
     }
+    # THE PID IS WHAT MAKES SessionEnd OPTIONAL.
+    #
+    # SessionEnd is pure cleanup - it deletes this record, the waiting flag, the
+    # status entry and the tab cache. But it runs while Claude Code is shutting
+    # down, and Claude cancels hooks that have not finished by the time it goes:
+    # "SessionEnd hook [...] failed: Hook cancelled", for every hook registered,
+    # not just this one. powershell.exe alone takes ~500 ms to start, so losing
+    # that race is normal rather than exceptional. Every one of those five files
+    # then leaks, and nothing could tell a leaked record from a live one.
+    #
+    # CLAUDE_PID is set by Claude Code in the environment of everything it
+    # spawns, and it is the pid of the claude process itself - so it costs
+    # nothing to record here and lets a reader prove the session is gone.
+    # startedAt doubles as the guard against pid reuse: a process holding this
+    # pid that started AFTER we did is somebody else.
     [ordered]@{
         key       = (Get-ZtKeyForPath $keyPath)
         cwd       = $keyPath
@@ -243,6 +258,7 @@ elseif ($hookEvent -eq 'SessionStart') {
         kind      = 'claude'
         sessionId = $sessionId
         zjSession = $zjSess
+        pid       = $env:CLAUDE_PID
         startedAt = (Get-Date).ToString('o')
         lastEvent = $hookEvent
     } | ConvertTo-Json -Compress | Set-Content -LiteralPath $liveFile -Encoding UTF8

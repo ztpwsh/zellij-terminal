@@ -704,9 +704,66 @@ function ConvertTo-ZtLocation {
 #  Live records
 # ---------------------------------------------------------------------------
 
+function Test-ZtLiveRecordAlive {
+    <#
+        Is the session this record describes still running?
+
+        A record carries the pid of the claude process that wrote it. Three
+        answers, and the middle one matters most:
+
+          - no pid at all  -> ALIVE. Records written by Set-ZtLive (a `zt start`
+            of a pwsh workspace, or any older record) have none, and there is no
+            evidence of death. Guessing dead here would delete a running
+            workspace's record.
+          - pid gone        -> dead.
+          - pid present but that process started AFTER this record -> dead, and
+            the pid has been reused by something unrelated. Without this a
+            leaked record can be kept alive indefinitely by a stranger.
+
+        cmdpal\ZellijTerminal.Palette\ZtStore.cs carries the same rule, because
+        the palette reads these files directly and cannot report a different
+        answer from `zt`. tests\Live.Tests.ps1 pins them together.
+    #>
+    param($Record)
+
+    if (-not $Record) { return $false }
+
+    $recPid = Get-ZtProp $Record 'pid'
+    if (-not $recPid) { return $true }
+
+    $n = 0
+    if (-not [int]::TryParse("$recPid", [ref]$n)) { return $true }
+    if ($n -le 0) { return $true }
+
+    $proc = Get-Process -Id $n -ErrorAction SilentlyContinue
+    if (-not $proc) { return $false }
+
+    $startedAt = Get-ZtProp $Record 'startedAt'
+    if ($startedAt) {
+        try {
+            $recorded = [datetime]::Parse($startedAt)
+            # One second of slack: the record is written moments after the
+            # process starts, and clock granularity should not condemn it.
+            if ($proc.StartTime -gt $recorded.AddSeconds(1)) { return $false }
+        } catch { }
+    }
+    return $true
+}
+
 function Get-ZtLive {
     <#
         Everything the hook has told us is running on this machine.
+
+        RETURNS DEAD RECORDS TOO, deliberately. A record left behind by a session
+        that never said goodbye is not rubbish - it is the entire input to
+        `zt restore`, which reopens what a crash took down (see
+        Resume-ZellijTerminal). Deleting it here would quietly turn shutdown
+        recovery into a no-op, and nothing would report the loss.
+
+        What the pid buys is an honest STATE instead: a record whose process is
+        gone means 'stale', not 'running'. Get-ZtWorkspaceRecords makes that
+        call; `zt sync` is where a record is actually removed, because that is
+        the command whose whole job is saying so.
     #>
     $dir = Get-ZtLiveDir
     if (-not (Test-Path -LiteralPath $dir)) { return @() }
@@ -748,6 +805,11 @@ function Set-ZtLive {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
 
+    # No pid, deliberately. This runs in the `zt` process, not in the thing being
+    # started - that is a command inside a Zellij pane whose pid we never learn.
+    # The hook fills it in moments later for a Claude workspace, and a record
+    # without one is treated as alive: absence of evidence, not evidence of
+    # death. See Test-ZtLiveRecordAlive.
     $rec = [ordered]@{
         key       = $Key
         cwd       = $Cwd
@@ -755,6 +817,7 @@ function Set-ZtLive {
         kind      = $Kind
         sessionId = $SessionId
         zjSession = $null
+        pid       = $null
         startedAt = (Get-Date).ToString('o')
         lastEvent = $EventName
     }
@@ -940,6 +1003,109 @@ function Get-ZtTerminalHostingSession {
         }
     }
     return $null
+}
+
+function Test-ZtOwnHookEntry {
+    <#
+        Is one entry of a Claude Code `hooks.<Event>` array OURS?
+
+        This exists because `hooks` is a SHARED key. Both halves of this rig
+        used to treat it as exclusively zt's: install replaced the whole key and
+        uninstall deleted the whole key, so anybody who also had, say, a
+        formatter hook or a plugin's hooks registered globally lost them - while
+        the uninstaller reported "rest of the file backed up and kept", which
+        was true of the file and false of their hooks.
+
+        Matched on the SCRIPT NAME rather than the full path on purpose: an
+        entry left behind by an older clone somewhere else is still ours, and
+        recognising it is what lets install replace it instead of accumulating a
+        second registration beside it - two hooks firing per event, one of them
+        pointing at a directory that may not exist any more.
+
+        The same rule is written a second time in install.ps1, which cannot
+        import this module: it runs before the module is installed, and under
+        Windows PowerShell 5.1. tests/Hooks.Tests.ps1 pins the two together.
+    #>
+    param($Entry)
+
+    if ($null -eq $Entry) { return $false }
+
+    # Every field here is optional in somebody else's hook, and reading an
+    # absent property throws under Set-StrictMode 2.0 - as does reading .Name
+    # off an EMPTY Properties collection, which is why this goes through
+    # ForEach-Object rather than $_.PSObject.Properties.Name. Found by the test:
+    # a foreign entry with no `command` field took the whole uninstall down.
+    $names = @()
+    try { $names = @($Entry.PSObject.Properties | ForEach-Object { $_.Name }) } catch { return $false }
+    if ($names -notcontains 'hooks') { return $false }
+
+    foreach ($h in @($Entry.hooks)) {
+        if ($null -eq $h) { continue }
+        $hn = @()
+        try { $hn = @($h.PSObject.Properties | ForEach-Object { $_.Name }) } catch { continue }
+
+        if (($hn -contains 'command') -and $h.command -and ($h.command -like '*claude-zj-hook*')) {
+            return $true
+        }
+        if ($hn -contains 'args') {
+            foreach ($a in @($h.args)) {
+                if ($a -and ($a -like '*claude-zj-hook*')) { return $true }
+            }
+        }
+    }
+    return $false
+}
+
+function Remove-ZtOwnHookEntries {
+    <#
+        Take a Claude Code `hooks` object and give back one with OUR entries
+        taken out and everybody else's left exactly as they were.
+
+        A function rather than a block inside the uninstaller because the
+        uninstaller cannot be run to test it: it also removes the module
+        junction and restores Zellij's config, so exercising the six lines that
+        matter would uninstall the rig from the machine doing the testing. This
+        is the part worth proving, so it is the part that is callable.
+
+        Returns Survivors (null when nothing is left, so the caller drops the
+        key rather than writing `"hooks": {}`, which is a registration that does
+        nothing), OursRemoved and ForeignKept.
+    #>
+    param($Hooks)
+
+    $survivors = [pscustomobject]@{}
+    $ours      = 0
+    $foreign   = 0
+
+    $events = @()
+    if ($Hooks) {
+        try { $events = @($Hooks.PSObject.Properties | ForEach-Object { $_.Name }) } catch { $events = @() }
+    }
+
+    if ($events.Count -gt 0) {
+        foreach ($ev in $events) {
+            $keep = @()
+            foreach ($entry in @($Hooks.$ev)) {
+                if (Test-ZtOwnHookEntry $entry) { $ours++ }
+                else { $keep += $entry; $foreign++ }
+            }
+            # An event left with nothing is dropped rather than written back as
+            # an empty array.
+            if ($keep.Count -gt 0) {
+                $survivors | Add-Member -NotePropertyName $ev -NotePropertyValue @($keep) -Force
+            }
+        }
+    }
+
+    $left = @()
+    try { $left = @($survivors.PSObject.Properties | ForEach-Object { $_.Name }) } catch { $left = @() }
+    $anyLeft = ($left.Count -gt 0)
+
+    return [pscustomobject]@{
+        Survivors   = $(if ($anyLeft) { $survivors } else { $null })
+        OursRemoved = $ours
+        ForeignKept = $foreign
+    }
 }
 
 function Get-ZtTabBase {
@@ -1237,10 +1403,22 @@ function Get-ZtWorkspaceRecords {
         $hasTab = $false
         if ($tab) { $hasTab = ($tabs -contains $tab) }
 
+        # A record is not proof of a running session. SessionEnd deletes it, but
+        # Claude Code cancels hooks that have not finished when it exits, so the
+        # record outlives the session - and the TAB outlives it too, because the
+        # pane drops back to a shell. Both survivors present used to read as
+        # 'running' forever, with `zt go` jumping to a dead session.
+        #
+        # The pid settles it. Gone process, surviving record -> 'stale', which is
+        # both honest and exactly what `zt restore` looks for.
+        $recAlive = $false
+        if ($rec) { $recAlive = Test-ZtLiveRecordAlive $rec }
+
         # State is decided by live Zellij, not by what the registry believes.
         $state = 'stopped'
         if (-not $avail)      { $state = 'unavailable' }
-        elseif ($hasTab -and $rec) { $state = 'running' }
+        elseif ($hasTab -and $rec -and $recAlive) { $state = 'running' }
+        elseif ($hasTab -and $rec) { $state = 'stale' }
         elseif ($hasTab)      { $state = 'tab-only' }
         elseif ($rec)         { $state = 'stale' }
 

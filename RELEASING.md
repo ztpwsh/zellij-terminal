@@ -220,8 +220,13 @@ PowerToys' own Keyboard Manager config under `%LOCALAPPDATA%`.
 - *Writing outside the clone*: `install.ps1 -Global` writes
   `%USERPROFILE%\.claude\settings.json`, so the hook fires for every project
   rather than this repo only. It merges rather than replaces - that file holds
-  your permissions and plugins - swapping the `hooks` key wholesale, backing the
-  file up first, and refusing outright if what is there is not valid JSON.
+  your permissions and plugins - backing the file up first, and refusing
+  outright if what is there is not valid JSON. `hooks` is a key other tools
+  write to as well, so only entries running `claude-zj-hook.ps1` are touched:
+  any hook of yours registered there survives an install, and an entry left by
+  a clone that has since moved is replaced rather than accumulated beside the
+  new one. It swapped the whole key until this was fixed, which cost anybody
+  with their own global hooks all of them, silently.
 
 ## Testing the uninstaller
 

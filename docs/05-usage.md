@@ -223,8 +223,10 @@ recursive delete follows the link and takes `module\ZellijTerminal` out of the
 clone with it.
 
 It restores the Zellij config you had before installing, removes only its own
-`hooks` key from `%USERPROFILE%\.claude\settings.json` rather than the file, and
-leaves Zellij, PowerToys and the .NET SDK alone — it did not install them.
+entries from the `hooks` key in `%USERPROFILE%\.claude\settings.json` — not the
+key, and not the file — and leaves Zellij, PowerToys and the .NET SDK alone; it
+did not install them. Hooks you registered yourself stay where they are, and the
+key is dropped only if nothing of yours was in it.
 
 ## Part 2 — Daily use
 

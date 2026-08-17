@@ -298,6 +298,13 @@ function Sync-ZellijTerminal {
         Live records outlive their tabs when a terminal is closed with the X
         button rather than detached. Those show as 'stale'. This clears them.
 
+        Since 0.7.7 a record also shows as 'stale' when its tab is still there
+        but the claude process that wrote it is gone - the common case being a
+        SessionEnd hook that Claude Code cancelled on the way out. Same symptom,
+        same cure, and this is the only place a record is deleted without being
+        asked: `zt restore` reads the leftovers to reopen what a crash took down,
+        so nothing prunes them behind your back.
+
     .EXAMPLE
         zt sync
     #>

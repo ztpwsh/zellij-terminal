@@ -122,6 +122,29 @@ function Invoke-ZtPad {
     }
 }
 
+function Invoke-ZtPaste {
+    <#
+        `zt paste [fix]`. Bare word reports, `fix` changes files - the same shape
+        as `zt pad`, and deliberately so: the fix rewrites Windows Terminal's
+        settings.json, which the rest of the rig goes out of its way never to
+        touch. That must be a thing you asked for by name.
+    #>
+    param([object[]]$Arguments = @())
+
+    $sub  = ''
+    $rest = @()
+    if ($Arguments.Count -gt 0) { $sub = "$($Arguments[0])" }
+    if ($Arguments.Count -gt 1) { $rest = $Arguments[1..($Arguments.Count - 1)] }
+
+    switch -Regex ($sub) {
+        '^(check|status)?$'  { return (Invoke-ZtForward 'Test-ZellijTerminalPaste' $rest) }
+        '^(fix|repair)$'     { return (Invoke-ZtForward 'Repair-ZellijTerminalPaste' $rest) }
+        default {
+            Write-Warning "Unknown: zt paste '$sub'. Try: zt paste | zt paste fix"
+        }
+    }
+}
+
 function Invoke-ZellijTerminal {
     <#
     .SYNOPSIS
@@ -180,6 +203,10 @@ function Invoke-ZellijTerminal {
         zt pad explain           what it is for, and whether you need one
         zt pad install           wire it up (PowerToys; -Listener ahk)
         zt pad uninstall         unwire it
+
+        zt paste                 why Ctrl+V shreds a multi-line paste inside
+                                 Zellij, and whether this machine is fixed
+        zt paste fix             fix it - both halves, with backups
 
         zt palette               what the Command Palette extension adds
 
@@ -261,6 +288,7 @@ function Invoke-ZellijTerminal {
         '^import$'         { return (Invoke-ZtForward 'Import-ZellijTerminal' $Rest) }
         '^palette$'        { return (Invoke-ZtForward 'Show-ZellijTerminalPaletteGuide' $Rest) }
         '^pad$'            { return (Invoke-ZtPad $Rest) }
+        '^paste$'          { return (Invoke-ZtPaste $Rest) }
         '^sessions?$'      { return (Invoke-ZtSessions $Rest) }
         '^hotkeys?$'       { return (Invoke-ZtForward 'Get-ZellijTerminalHotkey' $Rest) }
         '^dock$'           { if ($Rest -contains '-List' -or $Rest -contains '-list') { return (Get-ZellijTerminalDock) }; return (Invoke-ZtForward 'Add-ZellijTerminalDock' $Rest) }
@@ -411,7 +439,7 @@ Register-ArgumentCompleter -CommandName 'Invoke-ZellijTerminal' -ParameterName '
     # something like `zt setup` defeats the point of it existing.
     $verbs = @('setup', 'uninstall', 'export', 'import', 'ls', 'all', 'waiting', 'pick', 'add', 'rm', 'publish', 'start', 'stop', 'restart',
                'close', 'attach', 'next', 'prev', 'go', 'sync', 'flag', 'unflag', 'park', 'restore', 'roots', 'root',
-               'config', 'validate', 'check', 'pad', 'palette', 'dock', 'sessions', 'hotkeys', 'help')
+               'config', 'validate', 'check', 'pad', 'paste', 'palette', 'dock', 'sessions', 'hotkeys', 'help')
     $verbs |
         Where-Object   { $_ -like "$wordToComplete*" } |
         ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }

@@ -194,6 +194,114 @@ If the log is empty and nothing is happening, the hook is not registered for tha
 project. It fires only where it is registered; `install.ps1 -Global` registers it
 for every project.
 
+### B6 — Multi-line paste arrives one line at a time inside Zellij
+
+**Symptom:** Ctrl+V a block of text into a tab and each line arrives separately.
+In Claude Code every newline submits, so a ten-line paste becomes ten prompts.
+Outside Zellij the same paste lands as one block.
+
+**Cause:** bracketed paste. Windows Terminal wraps a paste in `ESC[200~` /
+`ESC[201~` **only when the application it is talking to has enabled mode 2004**,
+and inside a session that application is Zellij, not the pane. Zellij 0.44.3 on
+Windows does not negotiate it, so Terminal types the clipboard in as ordinary
+keystrokes and every newline is Enter. Zellij never sees a paste, so it cannot
+bracket the inner hop to the pane either — one missing negotiation, both hops
+broken.
+
+This is not `TERM`, `COLORTERM` or `NO_COLOR`, all of which look guilty and cost
+an afternoon. **Prove which layer it is without Claude in the picture:** at a
+plain `pwsh` prompt inside a Zellij pane, with nothing else running, paste two
+lines. If they arrive separately, the fault is below Claude entirely.
+
+**Fix:**
+
+```powershell
+zt paste          # which half is missing, if any
+zt paste fix      # do both, with a backup of every file touched
+```
+
+`zt check` reports it too, as **Paste (Ctrl+V)** under `env`.
+
+This is not part of `install.ps1` on purpose. The installer reaches Windows
+Terminal through *fragments* precisely so it never rewrites `settings.json`,
+which is JSONC — a `ConvertTo-Json` round-trip silently deletes every comment in
+it. Keybindings cannot be set from a fragment, so the rewrite is a targeted text
+edit, it happens only when asked for by name, and it takes a backup first.
+
+What it does, if you would rather do it by hand — and it needs both halves, one
+per layer:
+
+- **Windows Terminal** — unbind Ctrl+V so it stops performing the broken paste
+  and the keystroke reaches the application instead. In `settings.json`, in the
+  `keybindings` array:
+
+  ```json
+  { "id": null, "keys": "ctrl+v" }
+  ```
+
+  PSReadLine then handles Ctrl+V itself, reading the clipboard directly, and a
+  block paste at a shell prompt works.
+
+- **Claude Code** — it has no Ctrl+V of its own, so after the unbind the key does
+  nothing there. Point it at the clipboard action, in `~/.claude/keybindings.json`:
+
+  ```json
+  {
+    "bindings": [
+      { "context": "Chat", "bindings": { "ctrl+v": "chat:imagePaste" } }
+    ]
+  }
+  ```
+
+  Additive, so the built-in `alt+v` keeps working. Restart Claude to load it.
+
+**Workaround if you change nothing:** `alt+v` already reads the clipboard through
+the OS rather than the terminal, so it is immune to all of this — for text as
+well as images, despite the action's name.
+
+**Lesson:** a multiplexer is a terminal emulator. Any capability the pane
+negotiates — colour, paste, mouse — is negotiated twice, and the outer half is
+the one nobody thinks to check. `cmd.exe` has no clipboard binding of its own, so
+Ctrl+V does nothing there once Terminal stops handling it; that is the one cost
+of the fix, and `default_shell` is `pwsh.exe`.
+
+### B7 — `SessionEnd hook [...] failed: Hook cancelled`
+
+**Symptom:** quitting Claude Code prints one of these per registered hook —
+this rig's and anybody else's:
+
+```
+SessionEnd hook [powershell.exe ... claude-zj-hook.ps1] failed: Hook cancelled
+SessionEnd hook [node ".../session-end.js"] failed: Hook cancelled
+```
+
+**Cause:** not the hook. Two unrelated hooks failing identically is the tell.
+Claude Code cancels hooks that have not finished by the time it exits, and
+`powershell.exe` alone takes around 500 ms to start — run the same payload by
+hand and it completes in well under a second with exit 0 and nothing in
+`%TEMP%\claude-zellij-hook.log`. Losing that race is normal.
+
+**What it costs:** `SessionEnd` is pure cleanup — it deletes the live record,
+the waiting flag, the status entry and the tab cache, and clears the tab glyph.
+All five leak. The one that shows is the live record: the tab outlives the
+session too, because the pane drops back to a shell, so a workspace with both
+survivors used to read `running` indefinitely and `zt go` would jump to a dead
+session.
+
+**Fix:** the live record carries `CLAUDE_PID` from 0.7.7, so a dead session is
+recognised as one and reads `stale` instead. Clear the leftovers with:
+
+```powershell
+zt sync
+```
+
+**Lesson:** a shutdown hook is best-effort by construction — the process it runs
+in is the one going away. Anything that must be true afterwards has to be
+derivable from what is on disk, not from the hook having run. Note what this
+does **not** do: it does not delete the record. A record with a dead process is
+exactly what a crash leaves behind, and `zt restore` reads those to reopen what
+went down — see `docs/06-workspaces.md`.
+
 ## Known traps not yet hit
 
 ### Elevation mismatch (reach mode only)

@@ -168,12 +168,35 @@ function Uninstall-ZellijTerminal {
             $failed += "global settings is not valid JSON, left alone: $globalHook"
         }
         if ($g -and $g.PSObject.Properties.Name -contains 'hooks') {
-            if ($PSCmdlet.ShouldProcess($globalHook, 'Remove the hooks key, keeping everything else')) {
+            # Only OUR entries come out. `hooks` is a shared key: deleting it
+            # wholesale also deleted anybody else's hooks, while the line
+            # printed afterwards said the rest of the file was kept. It was -
+            # the FILE was. Their hooks were not.
+            $surgery   = Remove-ZtOwnHookEntries -Hooks $g.hooks
+            $ours      = $surgery.OursRemoved
+            $foreign   = $surgery.ForeignKept
+            $survivors = $surgery.Survivors
+
+            if ($ours -eq 0) {
+                if ($foreign -gt 0) { $kept += "global hooks ($foreign entries, none of them ours)" }
+            } elseif ($PSCmdlet.ShouldProcess($globalHook, 'Remove the zt hook entries, keeping any others')) {
                 Copy-Item -LiteralPath $globalHook `
                           -Destination "$globalHook.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak" -Force
-                $g.PSObject.Properties.Remove('hooks')
+
+                if ($survivors) {
+                    $g | Add-Member -NotePropertyName 'hooks' -NotePropertyValue $survivors -Force
+                } else {
+                    # Nothing left in it, so take the key out entirely rather
+                    # than leaving an empty object behind.
+                    $g.PSObject.Properties.Remove('hooks')
+                }
+
                 $g | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $globalHook -Encoding UTF8
-                $removed += 'global hook registration (rest of the file backed up and kept)'
+
+                $msg = "global hook registration ($ours entries"
+                if ($foreign -gt 0) { $msg += "; $foreign other hook entries left in place" }
+                $msg += '; rest of the file backed up and kept)'
+                $removed += $msg
             }
         }
     }

@@ -144,6 +144,25 @@ call into the module: importing a module costs more than the whole hook, the
 module sits on the pwsh 7 module path while the hook runs under 5.1, and this
 code is on the latency path of every session.
 
+**`SessionEnd` is not guaranteed to run, so nothing may depend on it.** Claude
+Code cancels hooks that have not finished by the time it exits —
+
+```
+SessionEnd hook [...] failed: Hook cancelled
+```
+
+— for every hook registered, not just this one, and `powershell.exe` alone takes
+around 500 ms to start. Losing that race is normal. So the record carries
+`CLAUDE_PID`, the pid of the claude process, which Claude Code sets in the
+environment of everything it spawns and which therefore costs nothing to read.
+A reader can then prove the session is gone rather than trusting a deletion that
+may never have happened; `startedAt` doubles as the guard against a pid that has
+since been reused by something unrelated.
+
+A record whose process is dead is **kept**, and reads as `stale`. It is not
+rubbish — it is the whole input to `zt restore` below. Only `zt sync` removes
+one.
+
 The next time you run `zt`, any live record in a folder the registry does not
 know about is registered on this device, marked `discovered`. In practice that
 is immediate. `zt ls -NoDiscover` opts out.
@@ -223,6 +242,13 @@ source is what makes it a recovery rather than an undo: a live record is written
 on `SessionStart` and deleted on `SessionEnd`, so one still sitting there with no
 session behind it means that session never exited — the machine went down under
 it. Those are exactly the workspaces worth bringing back.
+
+This is why nothing prunes live records automatically, however dead they look.
+The pid tells `zt` that a session has ended, and that changes its **state** to
+`stale`; it does not license anything to delete the record, because a record with
+a dead process is precisely what a crash leaves behind and precisely what restore
+reopens. Tidying them away on read would turn shutdown recovery into a silent
+no-op, and nothing would report the loss.
 
 Park is therefore optional. It makes the return exact; restore works without it.
 

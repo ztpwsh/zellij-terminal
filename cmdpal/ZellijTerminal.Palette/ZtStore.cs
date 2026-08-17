@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -141,6 +143,55 @@ internal static class ZtStore
     }
 
     /// <summary>
+    /// Is the session a live record describes still running?
+    ///
+    /// SessionEnd deletes these records, but Claude Code cancels hooks that have
+    /// not finished by the time it exits - "Hook cancelled", for every hook
+    /// registered - so records leak, and a leaked one is indistinguishable from
+    /// a live one without this. The record carries the pid of the claude process
+    /// that wrote it.
+    ///
+    /// No pid means ALIVE: records written by zt itself never have one, and
+    /// there is no evidence of death to act on. A pid whose process started
+    /// AFTER the record is a reused pid belonging to a stranger, not our
+    /// session.
+    ///
+    /// Mirrors Test-ZtLiveRecordAlive in module\ZellijTerminal\Private\Core.ps1
+    /// and is pinned to it by tests\Live.Tests.ps1. Used for STATE only: a dead
+    /// record still gets listed, because it is what `zt restore` reopens after a
+    /// crash. Removing one is `zt sync`'s job - this is a reader.
+    /// </summary>
+    private static bool IsLiveRecordAlive(JsonNode? n)
+    {
+        if (n is null) return false;
+
+        // ToString rather than Str: a pid may be written as a JSON string or a
+        // number, and reading only one of those shapes would silently treat
+        // every record of the other shape as immortal.
+        var raw = "";
+        try { raw = n["pid"]?.ToString() ?? ""; } catch { raw = ""; }
+
+        if (raw.Length == 0) return true;
+        if (!int.TryParse(raw, out var pid) || pid <= 0) return true;
+
+        Process proc;
+        try { proc = Process.GetProcessById(pid); }
+        catch { return false; }
+
+        var started = Str(n, "startedAt");
+        if (started.Length > 0 &&
+            DateTime.TryParse(started, CultureInfo.InvariantCulture,
+                              DateTimeStyles.RoundtripKind, out var recorded))
+        {
+            // A second of slack: the record is written moments after the process
+            // starts, and clock granularity should not condemn it.
+            try { if (proc.StartTime > recorded.AddSeconds(1)) return false; }
+            catch { }
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Everything this device knows about, reconciled against live Zellij.
     /// The registry is a cache; query-tab-names is the truth.
     /// </summary>
@@ -190,6 +241,9 @@ internal static class ZtStore
             {
                 var n = ReadJson(f);
                 var key = Str(n, "key");
+                // Dead records are KEPT, same as Get-ZtLive keeps them: they are
+                // what `zt restore` reopens after a crash. Aliveness decides the
+                // state in Build, not whether the record exists.
                 if (n is not null && key.Length > 0) live[key] = n;
             }
         }
@@ -266,9 +320,17 @@ internal static class ZtStore
         var hasTab = tab.Length > 0 && tabs.Contains(tab, StringComparer.OrdinalIgnoreCase);
         var available = path.Length > 0 && Directory.Exists(path);
 
+        // A record is not proof of a running session. SessionEnd deletes it, but
+        // Claude Code cancels hooks that have not finished when it exits, so the
+        // record outlives the session - and the tab outlives it too, because the
+        // pane drops back to a shell. Both survivors present read as "running"
+        // forever without this. Mirrors the ladder in Get-ZtWorkspaceRecords.
+        var liveAlive = live is not null && IsLiveRecordAlive(live);
+
         var state =
             !available ? "unavailable"
-            : hasTab && live is not null ? "running"
+            : hasTab && liveAlive ? "running"
+            : hasTab && live is not null ? "stale"
             : hasTab ? "tab-only"
             : live is not null ? "stale"
             : "stopped";
