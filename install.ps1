@@ -176,7 +176,7 @@ function Sync-PathFromRegistry {
 }
 
 if (-not $SkipZellijCheck) {
-    Write-Step '[0/3] Zellij'
+    Write-Step '[0/4] Zellij'
     $zv = Get-ZellijVersion
 
     if ($zv -and $zv -ge $MinZellij) {
@@ -222,7 +222,7 @@ if (-not $SkipZellijCheck) {
 }
 
 # --- 1. the module ----------------------------------------------------------
-Write-Step '[1/3] PowerShell module'
+Write-Step '[1/4] PowerShell module'
 
 $moduleSource = Join-Path $repo (Join-Path 'module' 'ZellijTerminal')
 if (-not (Test-Path -LiteralPath $moduleSource)) { throw "Module not found at $moduleSource" }
@@ -256,7 +256,7 @@ if ($moduleError) {
 
 # --- 2. Zellij config and layout -------------------------------------------
 if (-not $SkipZellijConfig) {
-    Write-Step '[2/3] Zellij config and layout'
+    Write-Step '[2/4] Zellij config and layout'
 
     # Note the extra `config` level. Getting this wrong means Zellij reads
     # nothing and reports nothing, which looks like the config being ignored.
@@ -527,7 +527,7 @@ public static class ZtIconExtract {
 
 # --- 3. the Claude Code hook ------------------------------------------------
 if (-not $SkipHook) {
-    Write-Step '[3/3] Claude Code hook'
+    Write-Step '[3/4] Claude Code hook'
 
     $hookTpl = Join-Path $repo (Join-Path 'hooks' 'settings.hooks.template.json')
 
@@ -654,6 +654,107 @@ if (-not $SkipHook) {
             }
         }
     }
+}
+
+# --- 4. verify what was just written ----------------------------------------
+#
+# AN INSTALLER THAT REPORTS SUCCESS WITHOUT READING BACK ITS OWN OUTPUT IS
+# GUESSING. This one printed "Done. Next: zac" on a machine with no status bar,
+# nine times in one evening, because every step it took returned without
+# throwing. Not throwing is not the same as having worked: a grant written
+# under a live Zellij server is deleted minutes later by that server, and a
+# layout written with an unsubstituted marker is a file that exists and does
+# nothing.
+#
+# So every claim this script makes is now re-read from disk before the banner.
+# It checks ONLY what this script is responsible for - not whether a session is
+# running or a client is attached, which are `zt check`'s business and are
+# legitimately false one second after an install.
+Write-Step '[4/4] Verifying'
+
+$verified = $true
+function Test-ZtClaim {
+    param([string]$What, [bool]$Ok, [string]$Detail)
+    if ($Ok) {
+        Write-Note "OK   $What"
+    } else {
+        Write-Warn "BAD  $What - $Detail"
+        $script:verified = $false
+        $script:problems += "$What - $Detail"
+    }
+}
+
+# The module has to be loadable by NAME, not merely present: the junction is
+# the whole point of step 1, and a junction to the wrong tree resolves happily
+# while running somebody else's code.
+$modOk = @(Get-Module -ListAvailable ZellijTerminal -ErrorAction SilentlyContinue).Count -gt 0
+Test-ZtClaim 'zt module resolves' $modOk 'nothing on the module path; open a new shell, or re-run with -Force'
+
+if (-not $SkipZellijConfig) {
+    $zjConfigDir2 = Join-Path $env:APPDATA (Join-Path 'Zellij' 'config')
+    $layDst2      = Join-Path $zjConfigDir2 (Join-Path 'layouts' 'claude.kdl')
+    $cfgDst2      = Join-Path $zjConfigDir2 'config.kdl'
+
+    Test-ZtClaim 'Zellij config written' (Test-Path -LiteralPath $cfgDst2) "missing at $cfgDst2"
+    Test-ZtClaim 'claude layout written' (Test-Path -LiteralPath $layDst2) "missing at $layDst2"
+
+    if (Test-Path -LiteralPath $layDst2) {
+        $layCheck = Get-Content -LiteralPath $layDst2 -Raw
+        if (-not $layCheck) { $layCheck = '' }
+
+        # An unreplaced marker is the silent one: the file is there, it parses,
+        # and the status bar never loads while the tab opens in the wrong
+        # directory. Documented in docs/05-usage.md and never checked until now.
+        $leftovers = @([regex]::Matches($layCheck, '\{\{[A-Z_]+\}\}') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+        Test-ZtClaim 'layout fully substituted' ($leftovers.Count -eq 0) (
+            'still contains ' + ($leftovers -join ', ') + ' - the status bar will not load and tabs open in the wrong place')
+
+        # The plugin path in the layout must be the one the grant names. These
+        # are computed in two places in this script and could drift.
+        $locMatch = [regex]::Match($layCheck, 'location="file:([^"]+)"')
+        if ($locMatch.Success) {
+            $locFs = ($locMatch.Groups[1].Value -replace '/', '\')
+            $grantText = ''
+            if (Test-Path -LiteralPath $permPath) {
+                $grantText = Get-Content -LiteralPath $permPath -Raw
+                if (-not $grantText) { $grantText = '' }
+            }
+            $grantOk = $grantText -match [regex]::Escape(($locFs -replace '\\', '/'))
+            Test-ZtClaim 'zjstatus permitted' $grantOk (
+                "no grant for the path the layout names. Close every session with " +
+                "``zellij delete-session <name> --force`` and re-run; until then there is no status bar")
+
+            if (-not (Test-Path -LiteralPath $locFs)) {
+                # NOT a failure: this script does not download the plugin, and
+                # says so above. But it must not be silent either.
+                Write-Warn "note: $locFs is not there yet - the bar appears once you download it"
+            }
+        }
+    }
+}
+
+if (-not $SkipHook) {
+    $claudeDir2 = Join-Path $repo '.claude'
+    if ($Global) { $claudeDir2 = Join-Path $HOME '.claude' }
+    $hookDst2 = Join-Path $claudeDir2 'settings.json'
+
+    $hookOk = $false
+    if (Test-Path -LiteralPath $hookDst2) {
+        $hookBack = Get-Content -LiteralPath $hookDst2 -Raw
+        # Read the PATH back out and test it, rather than trusting that a file
+        # mentioning the hook is a file pointing at one that exists. A stamped
+        # path survives the clone moving, and a hook whose script is gone fails
+        # per event, in the background, where nobody is looking.
+        $hookOk = $hookBack -match 'claude-zj-hook'
+        foreach ($m in [regex]::Matches($hookBack, '"([^"]*claude-zj-hook[^"]*)"')) {
+            if (-not (Test-Path -LiteralPath $m.Groups[1].Value)) { $hookOk = $false }
+        }
+    }
+    Test-ZtClaim 'Claude Code hook registered' $hookOk "no working claude-zj-hook entry in $hookDst2"
+}
+
+if ($verified -and $problems.Count -eq 0) {
+    Write-Note 'every file this installer wrote was read back and is correct'
 }
 
 # --- done -------------------------------------------------------------------
