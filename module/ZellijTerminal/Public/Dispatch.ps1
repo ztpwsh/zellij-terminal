@@ -137,7 +137,7 @@ function Invoke-ZellijTerminal {
         zt add . -Kind pwsh -Command '<cmd>'
                                  ...to run a command there instead
         zt add . -Kind pwsh      ...or just a shell, running nothing
-        zt rm <id>               unregister it
+        zt rm <id>               unregister it - also: unregister, forget
         zt publish <id>          promote it to the shared config
 
         zt pick                  choose one with the arrow keys and go to it
@@ -217,8 +217,20 @@ function Invoke-ZellijTerminal {
                                      Format-ZtTable -Empty 'Nothing is waiting for input.' `
                                                     -EmptyHint 'Everything registered:  zt') }
 
-        '^add$'            { return (Invoke-ZtForward 'Register-ZellijTerminal' $Rest) }
-        '^(rm|remove)$'    { return (Invoke-ZtForward 'Unregister-ZellijTerminal' $Rest) }
+        # THE PALETTE'S WORDS WORK HERE TOO. Its buttons say "Register a folder"
+        # and "Unregister", and the CLI accepted neither - it took `add` and
+        # `rm`, so the vocabulary a user had just been taught did not transfer.
+        #
+        # `remove` was the worst of it: it routes HERE, to unregister, while the
+        # cmdlet actually named Remove-ZellijTerminalTab is what `close` calls.
+        # The one verb containing "remove" pointed at the opposite thing from
+        # the cmdlet named for it. Kept for muscle memory, no longer alone.
+        #
+        # `forget` because it is what the operation does - the directory is
+        # untouched and only this device's registry changes, which is exactly
+        # what the palette's confirmation dialog promises.
+        '^(add|register)$'                { return (Invoke-ZtForward 'Register-ZellijTerminal' $Rest) }
+        '^(rm|remove|unregister|forget)$' { return (Invoke-ZtForward 'Unregister-ZellijTerminal' $Rest) }
         '^publish$'        { return (Invoke-ZtForward 'Publish-ZellijTerminal' $Rest) }
 
         '^pick$'           { return (Invoke-ZtForward 'Select-ZellijTerminal' (@('-Go') + $Rest)) }
@@ -370,7 +382,8 @@ Register-ArgumentCompleter -CommandName 'Invoke-ZellijTerminal' -ParameterName '
     }
 
     try {
-        if (@('start', 'stop', 'restart', 'close', 'rm', 'remove', 'publish', 'ls', 'list') -contains $verb) {
+        if (@('start', 'stop', 'restart', 'close', 'rm', 'remove', 'unregister', 'forget',
+              'publish', 'ls', 'list') -contains $verb) {
             Get-ZellijTerminal -All |
                 Where-Object   { $_.Id -like "$wordToComplete*" } |
                 ForEach-Object {

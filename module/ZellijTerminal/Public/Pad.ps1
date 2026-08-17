@@ -86,13 +86,32 @@ function Get-ZtPadKeyMap {
     #
     # The repo path has no spaces, so quotes were never needed. Where it does,
     # fall back to the 8.3 short path rather than quoting - same reason.
-    if ($tabPs1 -match '\s') {
+    # CHECK THE RESULT, not that the call did not throw. GetFile().ShortPath
+    # returns the LONG path unchanged on a volume with 8.3 name creation
+    # disabled - no exception, no warning, and the remap that gets written is
+    # the unusable one this whole passage exists to avoid. So re-test for
+    # whitespace afterwards and refuse, rather than writing a key that fails
+    # silently and sends the user hunting through PowerToys.
+    foreach ($p in 'tabPs1', 'zellij') {
+        $val = (Get-Variable $p -ValueOnly)
+        if ($val -notmatch '\s') { continue }
+
         try {
-            $fso    = New-Object -ComObject Scripting.FileSystemObject
-            $tabPs1 = $fso.GetFile($tabPs1).ShortPath
+            $fso = New-Object -ComObject Scripting.FileSystemObject
+            Set-Variable $p -Value ($fso.GetFile($val).ShortPath)
         } catch {
-            Write-Warning ("The repo path contains spaces and no 8.3 short name is available. " +
-                           "Keyboard Manager may fail to launch keys 3 and 4 silently.")
+            # Swallowed on purpose, and only here: the re-test below is what
+            # decides, so a failure to get a short name and a short name that
+            # still has spaces reach the same refusal by the same route.
+            Write-Verbose "8.3 lookup failed for '$val': $($_.Exception.Message)"
+        }
+
+        if ((Get-Variable $p -ValueOnly) -match '\s') {
+            throw ("The path '$val' contains spaces and this volume has no 8.3 short name for it. " +
+                   "Keyboard Manager takes runProgramArgs as one string and does not honour embedded " +
+                   "quotes, so the remap would be written and then do nothing at all, with no error. " +
+                   "Move the clone (or zellij.exe) somewhere without spaces, or enable 8.3 names on " +
+                   "that volume, and run zt pad install again.")
         }
     }
 

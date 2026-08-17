@@ -59,9 +59,16 @@ Write-Host '[1/4] publishing...' -ForegroundColor Cyan
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-& dotnet publish $proj -c $Configuration -r win-x64 --self-contained true `
-    -p:Platform=x64 -p:PublishSingleFile=false -o $stage | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "publish failed ($LASTEXITCODE)" }
+# NOT piped to Out-Null. dotnet writes its diagnostics - a missing SDK, an
+# unreadable Platform.xml, the compile errors - to STDOUT, so discarding it left
+# a stranger with "publish failed (1)" and nothing whatever to act on. Kept, and
+# the tail re-shown with the failure, so the reason travels with it.
+$publishLog = & dotnet publish $proj -c $Configuration -r win-x64 --self-contained true `
+    -p:Platform=x64 -p:PublishSingleFile=false -o $stage 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $publishLog | Select-Object -Last 30 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    throw "publish failed ($LASTEXITCODE) - the last lines of its output are above"
+}
 
 # Every pack gets a new version, or Add-AppxPackage refuses with 0x80073CFB:
 # "same identity as an already-installed package but the contents are
@@ -94,8 +101,11 @@ Write-Host '[2/4] packing...' -ForegroundColor Cyan
 if (-not (Test-Path $out)) { New-Item -ItemType Directory -Path $out -Force | Out-Null }
 if (Test-Path $msix) { Remove-Item $msix -Force }
 
-& $makeappx pack /d $stage /p $msix /o | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "makeappx failed ($LASTEXITCODE)" }
+$packLog = & $makeappx pack /d $stage /p $msix /o 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $packLog | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    throw "makeappx failed ($LASTEXITCODE) - its output is above"
+}
 
 # --- 3. sign ----------------------------------------------------------------
 Write-Host '[3/4] signing...' -ForegroundColor Cyan
@@ -120,8 +130,11 @@ if (-not $cert) {
     Write-Host ''
 }
 
-& $signtool sign /fd SHA256 /a /sha1 $cert.Thumbprint $msix | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
+$signLog = & $signtool sign /fd SHA256 /a /sha1 $cert.Thumbprint $msix 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $signLog | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    throw "signtool failed ($LASTEXITCODE) - its output is above"
+}
 
 Write-Host "  signed: $msix" -ForegroundColor DarkGray
 

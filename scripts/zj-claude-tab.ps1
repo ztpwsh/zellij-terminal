@@ -102,6 +102,19 @@ function Set-Tab {
     $target = $Name
     if ($script:LiveTabName.ContainsKey($Name)) { $target = $script:LiveTabName[$Name] }
 
+    # WITH NOTHING ATTACHED, go-to-tab-name IS A SILENT NO-OP THAT EXITS 0. The
+    # docstring above says the miss case looks like a dead pad; the detached
+    # case looks identical and is far commoner - close the terminal, keep the
+    # session. Writing the state file anyway made it worse than a no-op: the
+    # next press cycled from a tab nobody ever moved to.
+    $clients = Invoke-Zellij @('list-clients')
+    $rows = @($clients -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+\s' })
+    if ($rows.Count -eq 0) {
+        Write-Error ("Nothing is attached to session '$Session', so a tab switch would do nothing " +
+                     "and report success. Open a terminal on it first: zac")
+        exit 3
+    }
+
     Invoke-Zellij @('go-to-tab-name', $target) | Out-Null
     Set-Content -LiteralPath $stateFile -Value $Name -Encoding UTF8
 }

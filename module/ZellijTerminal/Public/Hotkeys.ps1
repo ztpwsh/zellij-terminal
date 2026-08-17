@@ -81,7 +81,17 @@ function Get-ZellijTerminalHotkey {
     Write-Host ($hk | ConvertTo-Json -Depth 8)
 
     if (-not $SamplePath) {
-        $SamplePath = Join-Path (Get-ZtRoot) (Join-Path 'spikes' 'cmdpal-hotkey-sample.json')
+        # NOT into the clone, and not into spikes/ least of all. This wrote
+        # <clone>\spikes\cmdpal-hotkey-sample.json, so running `zt hotkeys` in a
+        # published checkout CREATED a spikes directory - the one directory this
+        # project promises is never published - and put the device name in it.
+        # Nothing could catch that either: the anonymisation gate reads tracked
+        # files, and this is a runtime write.
+        #
+        # It is a capture of this machine's Command Palette bindings, so it is
+        # device state and belongs with the rest of it. Same reasoning as
+        # Get-ZtConfigHome: a clone is one checkout of the code, not the machine.
+        $SamplePath = Join-Path (Get-ZtConfigHome) 'cmdpal-hotkey-sample.json'
     }
     Write-ZtJson $SamplePath ([pscustomobject]@{
         capturedAt     = (Get-Date).ToString('o')

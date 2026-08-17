@@ -111,6 +111,17 @@ param(
 $ErrorActionPreference = 'Stop'
 $flagDir = Join-Path $env:TEMP 'claude-zellij-flags'
 
+# Fail loudly and immediately rather than as a raw CommandNotFoundException from
+# somewhere in the middle. Same guard zj-claude-tab.ps1 carries, and the same
+# rule the module states in Invoke-ZtZellij: zellij missing is a result, not an
+# exception. With ErrorActionPreference Stop this script was the one path that
+# still threw the raw error - reached by `zt start` and `zt close`.
+if (-not (Get-Command zellij -ErrorAction SilentlyContinue)) {
+    Write-Error ("Cannot find zellij - it is not on PATH in this process. " +
+                 "Install it (winget install zellij) and open a new shell, or run install.ps1.")
+    exit 2
+}
+
 # ---------------------------------------------------------------------------
 #  Pane prelude - runs in every tab this script creates
 # ---------------------------------------------------------------------------

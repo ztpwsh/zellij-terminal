@@ -137,6 +137,108 @@ Describe 'Anonymisation and placeholders' -Skip:(-not $script:HasGit) {
         }
     }
 
+    Context 'What the history carries, not just the tip' {
+
+        # Every other assertion in this file reads `git ls-files`, which is the
+        # TIP. A file committed once and deleted later is invisible to all of
+        # them, and is still in the packfile that every cloner receives.
+        #
+        # Not theoretical. spikes/spike-02-per-tab-cwd.md shipped in 0.5.0, was
+        # deleted in 0.6.0, and stayed recoverable from the published history
+        # until the branch was rebuilt as a fresh orphan - byte-identical to the
+        # private copy, so nothing on the publish path had sanitised it. This
+        # file meanwhile carried a comment asserting that no spike is published
+        # and none ever will be. The gate was green throughout, because the gate
+        # could not see history at all.
+        #
+        # WHICH HISTORY. In the private repository the published branch is
+        # `release`, and `--all` would sweep in the development branch, whose
+        # entire job is to hold the private material. In a published clone there
+        # is no `release` and every ref is publishable. So: scan `release` where
+        # it exists, everything otherwise.
+
+        BeforeAll {
+            $hasRelease = & git -C $script:RepoRoot rev-parse --verify --quiet refs/heads/release
+            $script:HistoryRef = if ($hasRelease) { 'release' } else { '--all' }
+
+            # --name-only over the log, rather than rev-list --objects, because
+            # the latter also lists TREES: `docs` and `spikes` arrive as bare
+            # directory names and there is no allow-list entry for a directory.
+            $script:HistoryPaths = @(
+                & git -C $script:RepoRoot log --pretty=format: --name-only $script:HistoryRef |
+                    ForEach-Object { $_.Trim() } |
+                    Where-Object { $_ } |
+                    Sort-Object -Unique
+            )
+        }
+
+        It 'the published branch has a history to check' {
+            # Guards the check above from passing vacuously. An empty path list
+            # would satisfy every assertion below while proving nothing, which
+            # is the failure this whole file exists to refuse.
+            $script:HistoryPaths.Count | Should -BeGreaterThan 0 -Because (
+                "no paths were found in '$script:HistoryRef' - the history scan is not looking at anything")
+        }
+
+        It 'every path ever committed to the published branch is still on the allow-list' {
+            # Strict on purpose. A path that was published once and has since
+            # been dropped from the manifest is exactly the spike-02 case: gone
+            # from the tip, present in every clone. The fix for a failure here
+            # is to rebuild the branch as a fresh orphan and force-push, not to
+            # relax this test.
+            $violations = @(
+                $script:HistoryPaths | Where-Object { $_ -notin $script:PublishedSet }
+            )
+
+            $violations.Count | Should -Be 0 -Because (
+                "these paths are reachable from the published history but are not published now, so every`n" +
+                "clone carries a file this repository does not intend to ship:`n" +
+                ($violations -join "`n") + "`n`n" +
+                "Rebuild the branch rather than deleting the file again:`n" +
+                "    git worktree remove <worktree>; git branch -D release`n" +
+                "    pwsh ./tools/Publish-Release.ps1`n" +
+                "    git push public release:main --force")
+        }
+
+        It 'no personal identifier appears anywhere in the published history' {
+            # The content half. A name fixed in a later commit is still readable
+            # in the earlier one, and only the tip is otherwise inspected.
+            $needles = @(
+                ('juli' + 'an'),
+                ('snow' + 'den'),
+                ('snow' + 'dej')
+            )
+            $pattern = '(?i)(' + ($needles -join '|') + ')'
+
+            $blobs = @(
+                & git -C $script:RepoRoot rev-list --objects $script:HistoryRef |
+                    ForEach-Object {
+                        $parts = $_ -split ' ', 2
+                        if ($parts.Count -eq 2 -and $parts[1].Trim()) {
+                            [pscustomobject]@{ Sha = $parts[0]; Path = $parts[1].Trim() }
+                        }
+                    }
+            )
+
+            # Its own list: $binaryExtensions above is local to the outer
+            # BeforeAll, and a $null here would silently read PNGs as text.
+            $binary = @('.png', '.jpg', '.ico', '.wasm', '.dll', '.exe', '.pdf')
+
+            $violations = foreach ($b in $blobs) {
+                if ([System.IO.Path]::GetExtension($b.Path).ToLowerInvariant() -in $binary) { continue }
+                $text = & git -C $script:RepoRoot cat-file -p $b.Sha 2>$null
+                if ($text -and (($text -join "`n") -match $pattern)) {
+                    "  $($b.Path) @ $($b.Sha)  personal identifier '$($Matches[1])'"
+                }
+            }
+            $violations = @($violations)
+
+            $violations.Count | Should -Be 0 -Because (
+                "a name in the published history cannot be recalled from anyone's clone:`n" +
+                ($violations -join "`n"))
+        }
+    }
+
     Context 'Unresolved placeholders' {
 
         # The name deliberately spells the placeholder out in words. Pester
@@ -363,10 +465,17 @@ Describe 'Anonymisation and placeholders' -Skip:(-not $script:HasGit) {
         }
 
         It 'no published file cites a spike' {
-            # The spikes are lab notes of the private side - machine paths,
+            # Spikes are lab notes of the private side - machine paths,
             # private repository paths, and the record of what was tried before
-            # the thing that worked. None of them are published and none will
-            # be, so a citation to one can never be followed from here.
+            # the thing that worked. None is published at the tip, so a citation
+            # to one cannot be followed from here.
+            #
+            # That used to read "none of them are published and none will be",
+            # which was false when it was written: spike-02 had shipped in 0.5.0
+            # and, though deleted in 0.6.0, was still reachable from the
+            # published history. Fixed by rebuilding the branch as a fresh
+            # orphan, and by the history Context above, which is what makes a
+            # claim about "never" checkable rather than asserted.
             #
             # This is not the same check as the one above. These were written
             # "(spike 03)" in prose, with no path and nothing link-shaped, so

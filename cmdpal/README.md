@@ -45,17 +45,28 @@ the list first.
 
 **Per workspace**
 
-| Key | Does |
-|---|---|
-| `Enter` | go to its tab |
-| `Ctrl+S` / `Ctrl+T` | start / stop |
-| `Ctrl+R` | restart, resuming the same Claude session |
-| `Ctrl+F` | raise or lower its hand — the thing pad key 3 jumps to |
-| `Ctrl+E` | open the folder |
-| `Ctrl+Shift+C` | copy the path |
-| `Ctrl+P` | publish to the shared list — the deliberate "every machine should have this" |
-| `Ctrl+W` | close the tab (confirms) |
-| `Ctrl+D` | unregister (confirms) |
+| Key | Does | Typed |
+|---|---|---|
+| `Enter` | go to its tab | `zt go <id>` |
+| `Ctrl+S` / `Ctrl+T` | start / stop | `zt start` / `zt stop` |
+| `Ctrl+R` | restart, resuming the same Claude session | `zt restart` |
+| `Ctrl+F` | raise or lower its hand — the thing pad key 3 jumps to | `zt flag` / `zt unflag` |
+| `Ctrl+E` | open the folder | — |
+| `Ctrl+Shift+C` | copy the path | — |
+| `Ctrl+P` | publish to the shared list — the deliberate "every machine should have this" | `zt publish` |
+| `Ctrl+W` | close the tab (confirms) | `zt close <id>` |
+| `Ctrl+D` | unregister (confirms) | `zt unregister <id>` |
+
+The last column is not a translation table you have to learn: the palette runs
+those exact commands, and the CLI answers to the palette's words. `unregister`
+was added for this reason — the button said "Unregister" and the only spellings
+that worked were `rm` and `remove`, so the word you had just clicked was the one
+word that failed when typed.
+
+Both leave the directory alone. `Ctrl+W` closes the tab and keeps the
+registration; `Ctrl+D` removes the registration and keeps the folder. Do them in
+that order on a workspace you are finished with — unregistering first leaves the
+tab on screen with nothing in the registry that knows about it.
 
 No `Ctrl+Alt` anywhere: on a UK layout that is AltGr — see D21 in
 `docs/02-decisions.md`.
@@ -134,10 +145,23 @@ The failure mode is silence — no error, nothing logged. In order of likelihood
 4. `Get-Process ZellijTerminal.Palette` — if the palette has launched it, the
    registration is working and the problem is in the code, not the manifest.
 
+## What the build needs
+
+All four, before `pack.ps1` will get through:
+
+| | Why it fails without it |
+|---|---|
+| **.NET 10 SDK** — `winget install Microsoft.DotNet.SDK.10` | The 0.11 toolkit references `System.Runtime 10.0.0.0`, so SDK 9 fails with `CS1705` |
+| **Windows SDK 10.0.26100** — `winget install Microsoft.WindowsSDK.10.0.26100` | `cswinrt` reads `Windows Kits\10\Platforms\UAP\<version>\Platform.xml` and fails with *"Could not read the Windows SDK's Platform.xml"* if that exact version is absent. It is named in `TargetFramework`, so a newer SDK alone is not enough |
+| **A NuGet source** — `dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org` | Some machines genuinely have none configured, and the restore fails on the first package |
+| **Developer mode**, Settings → System → For developers | `Add-AppxPackage` refuses a self-signed package without it |
+
+`pack.ps1` prints the tail of whatever failed, so start with what it shows you
+rather than the exit code.
+
 ## Version pinning
 
 `Microsoft.CommandPalette.Extensions 0.11.260520004`, matching the installed
 `Microsoft.CommandPalette 0.11`. The API moves between releases and a skew shows
-up as the extension simply not appearing. It requires **.NET 10** — the 0.11
-toolkit references `System.Runtime 10.0.0.0`, so SDK 9 fails with CS1705.
+up as the extension simply not appearing.
 

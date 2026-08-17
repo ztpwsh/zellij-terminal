@@ -361,13 +361,28 @@ if (Test-Path -LiteralPath $hookScript) {
     $inFile = Join-Path $probe 'in.json'
     '{"hook_event_name":"Stop","cwd":"C:/code/probe"}' |
         Set-Content -LiteralPath $inFile -Encoding UTF8 -NoNewline
+    # Redirect the child's TEMP by setting it HERE and letting the child inherit
+    # it, rather than with Start-Process -Environment.
+    #
+    # -Environment reads better and does not exist where it matters: it arrived
+    # in PowerShell 7.4, and the header of this file promises 5.1 - which is the
+    # shell this very probe exists to test the hook under. Run under 5.1 the
+    # parameter is not found, the whole probe throws, and the catch below
+    # reports "Hook script runs FAIL" with a binding error. So the check that
+    # exists to prove the hook works on 5.1 was the one thing guaranteed to fail
+    # there. Verified: (Get-Command Start-Process).Parameters.ContainsKey(
+    # 'Environment') is False on 5.1.26100 and True on 7.6.4.
+    $savedTemp = $env:TEMP
+    $savedTmp  = $env:TMP
     try {
+        $env:TEMP = $probe
+        $env:TMP  = $probe
         $p = Start-Process -FilePath 'powershell.exe' `
             -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$hookScript `
             -RedirectStandardInput $inFile `
             -RedirectStandardOutput (Join-Path $probe 'out.txt') `
             -RedirectStandardError  (Join-Path $probe 'err.txt') `
-            -NoNewWindow -PassThru -Environment @{ TEMP = $probe; TMP = $probe }
+            -NoNewWindow -PassThru
         $p.WaitForExit()
         $wrote = Test-Path (Join-Path $probe 'claude-zellij-flags\claude-probe.json')
         if ($p.ExitCode -eq 0 -and $wrote) {
@@ -381,6 +396,8 @@ if (Test-Path -LiteralPath $hookScript) {
     } catch {
         Add-Result '4 hooks' 'Hook script runs' 'FAIL' $_.Exception.Message
     } finally {
+        $env:TEMP = $savedTemp
+        $env:TMP  = $savedTmp
         Remove-Item $probe -Recurse -Force -ErrorAction SilentlyContinue
     }
 } else {

@@ -62,6 +62,7 @@ Describe 'Command Palette extension - contract with the module' -Skip:(-not $Has
         $script:Csproj         = Get-Source 'ZellijTerminal.Palette.csproj'
         $script:ProviderSource = Get-Source 'Provider.cs'
         $script:ConfigSource   = Get-Source 'ConfigPage.cs'
+        $script:ZellijCliSource = Get-Source 'ZellijCli.cs'
 
         # Everything the palette can invoke, in one string. Which FILE a verb
         # lives in is an implementation detail that has already moved once.
@@ -413,6 +414,56 @@ Describe 'Command Palette extension - contract with the module' -Skip:(-not $Has
             # packaged on.
             $script:Csproj | Should -Match '<Platforms>[^<]*\bx64\b'
             $script:Csproj | Should -Match '<RuntimeIdentifiers>[^<]*\bwin-x64\b'
+        }
+
+        It 'does not send -NonInteractive to a command a person has to answer' {
+            # -NonInteractive was added unconditionally and quietly disabled
+            # every visible command: under it Read-Host does not prompt, it
+            # errors and CARRIES ON. So the trailing "Read-Host 'enter to close'"
+            # returned instantly and the console was destroyed before anything
+            # could be read - the exact failure RunVisible exists to fix - and
+            # "Define a root", which is two Read-Host prompts, could never
+            # collect anything while still exiting 0.
+            #
+            # Asserted as the GUARD, not the absence of the string: the flag is
+            # still correct for hidden commands, where nothing can answer.
+            $script:ZtCliSource | Should -Match 'if\s*\(!visible\)\s*psi\.ArgumentList\.Add\("-NonInteractive"\)'
+
+            $bare = @([regex]::Matches($script:ZtCliSource, 'ArgumentList\.Add\("-NonInteractive"\)')).Count
+            $bare | Should -Be 1 -Because 'the flag must be added in exactly one place, behind the visibility test'
+        }
+
+        It 'does not redirect a stream nobody reads' {
+            # Redirecting stderr while only ever reading stdout is how a child
+            # deadlocks: zellij fills the stderr pipe, blocks, never exits, and
+            # ReadToEnd never returns - so the timeout on the following line
+            # could not fire, because control never reached it.
+            $script:ZellijCliSource | Should -Match 'RedirectStandardError\s*=\s*false'
+        }
+
+        It 'waits for zellij before reading its output' {
+            # WaitForExit must come first for the timeout to mean anything.
+            $waitAt = $script:ZellijCliSource.IndexOf('WaitForExit(timeoutMs)')
+            $readAt = $script:ZellijCliSource.IndexOf('StandardOutput.ReadToEnd()')
+            $waitAt | Should -BeGreaterThan 0
+            $readAt | Should -BeGreaterThan 0
+            $waitAt | Should -BeLessThan $readAt -Because (
+                'ReadToEnd on a process that never exits blocks forever, whatever timeout follows it')
+        }
+
+        It 'reports whether killing a session worked' {
+            # These were void, and the caller toasted "Killed x" whether zellij
+            # had killed anything, refused, or never run at all.
+            $script:ZellijCliSource | Should -Match 'internal static bool KillSession'
+            $script:ZellijCliSource | Should -Match 'internal static bool DeleteSession'
+        }
+
+        It 'logs the zellij-direct actions the README promises are logged' {
+            # cmdpal/README.md tells the reader that every action writes a start
+            # line and an exit line, and that an empty log means the palette
+            # itself is broken. Four actions went through ZellijCli, which had
+            # no logging at all, so that advice sent people to the wrong layer.
+            $script:ZellijCliSource | Should -Match 'ZtCli\.Log'
         }
 
         It 'ships a pack script beside the project' {

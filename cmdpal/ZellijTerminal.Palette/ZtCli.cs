@@ -39,7 +39,10 @@ internal static class ZtCli
     /// Best effort throughout: logging must never be the thing that breaks an
     /// action, so every failure here is swallowed.
     /// </summary>
-    private static void Log(string message)
+    // internal, not private: ZellijCli logs through here too. Every action the
+    // palette takes belongs in one file, or the README's promise that the log
+    // records them all is only true of half of them.
+    internal static void Log(string message)
     {
         try
         {
@@ -104,7 +107,29 @@ internal static class ZtCli
                 CreateNoWindow = !visible,
             };
             psi.ArgumentList.Add("-NoProfile");
-            psi.ArgumentList.Add("-NonInteractive");
+
+            // -NonInteractive ONLY when there is nobody to be interactive with.
+            //
+            // It was passed on every invocation, which quietly disabled every
+            // visible command. Under -NonInteractive, Read-Host does not
+            // prompt: it fails with "PowerShell is in NonInteractive mode" and
+            // execution CONTINUES, so
+            //   * the trailing `Read-Host 'enter to close'` on the five "in a
+            //     window" commands returned instantly, pwsh exited, and the
+            //     console was destroyed before anything could be read - the
+            //     exact failure RunVisible was written to fix, reintroduced one
+            //     argument later;
+            //   * "Define a root", whose whole implementation is two Read-Host
+            //     prompts, could never collect a name or a path, and still
+            //     exited 0, so the log said success.
+            // Demonstrated: pwsh -NonInteractive -Command "Read-Host 'x'"
+            // prints the NonInteractive error, runs on, and exits 0.
+            //
+            // The point of the visible path is a person answering, so the flag
+            // is exactly wrong there. Hidden commands keep it: nothing can
+            // answer them, and a prompt would hang an invisible process.
+            if (!visible) psi.ArgumentList.Add("-NonInteractive");
+
             psi.ArgumentList.Add("-Command");
             psi.ArgumentList.Add("Import-Module ZellijTerminal -ErrorAction Stop; " + command);
 
@@ -150,8 +175,15 @@ internal static class ZtCli
         {
             if (path.Length == 0) return;
             Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            Log($"start   open {path}");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // Was: catch { }. "Open folder" doing nothing and writing nothing is
+            // indistinguishable from the palette being broken - which is what
+            // the README tells the reader an empty log means.
+            Log($"FAILED  open {path} ({ex.GetType().Name}: {ex.Message})");
+        }
     }
 
     internal static void OpenIn(string exe, string path)
@@ -160,8 +192,14 @@ internal static class ZtCli
         {
             if (path.Length == 0) return;
             Process.Start(new ProcessStartInfo(exe, path) { UseShellExecute = true });
+            Log($"start   {exe} {path}");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // The commonest cause here is `code` not being on PATH, which is a
+            // sentence the log can say and a dismissed palette cannot.
+            Log($"FAILED  {exe} {path} ({ex.GetType().Name}: {ex.Message})");
+        }
     }
 }
 

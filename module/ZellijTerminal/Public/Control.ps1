@@ -195,8 +195,19 @@ function Stop-ZellijTerminal {
     Start-Sleep -Milliseconds 300
     Send-ZtKeys -Session $Session -Tab $ws.Tab -Bytes @(3) | Out-Null
 
+    # SAY WHAT WAS SENT, NOT WHAT WAS ACHIEVED. Ctrl+C arriving in the right tab
+    # is the whole of what this can observe: whether the program took it, took
+    # it slowly, or ignored it is not visible from out here. This used to print
+    # "Stopped 'x' - tab 'x' is now a shell", a claim about the other end of the
+    # wire that nothing checked.
+    #
+    # The live record is what `zt` reads to decide the state, so it is removed:
+    # the session was told to stop and the record would otherwise outlive the
+    # truth either way. The hook rewrites it in seconds if the session is still
+    # alive, which is the self-correcting half.
     Remove-ZtLive $ws.Key
-    Write-Host "Stopped '$($ws.Id)' - tab '$($ws.Tab)' is now a shell." -ForegroundColor Green
+    Write-Host "Sent Ctrl+C twice to tab '$($ws.Tab)' for '$($ws.Id)'." -ForegroundColor Green
+    Write-Host "  Run zt to see whether it took - a session that ignores it stays listed as running." -ForegroundColor DarkGray
 }
 
 function Restart-ZellijTerminal {

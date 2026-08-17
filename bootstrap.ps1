@@ -92,5 +92,15 @@ if (Test-Path -LiteralPath $dest) {
 # directory and the hook template.
 & (Join-Path $dest 'install.ps1')
 
+# install.ps1 sets a non-zero exit code deliberately, and says why in its own
+# closing comment: "bootstrap.ps1 printing 'keep the clone' after a failed
+# install was the visible symptom". This was the link that still did not read
+# it - the two git calls above are both checked, and the one step that can
+# half-succeed was not.
+if ($LASTEXITCODE -ne 0) {
+    throw ("install.ps1 failed ($LASTEXITCODE) - the problems are printed above. " +
+           "The clone at $dest is intact; fix what it named and re-run install.ps1 there.")
+}
+
 Write-Host "  The clone is at $dest - keep it; the module is junctioned to it." -ForegroundColor DarkGray
 Write-Host ''

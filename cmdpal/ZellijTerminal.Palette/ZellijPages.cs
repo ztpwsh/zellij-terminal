@@ -138,8 +138,17 @@ internal sealed partial class ZellijSessionCommand : InvokableCommand
 
     public override ICommandResult Invoke()
     {
-        ZellijCli.KillSession(_name);
-        if (_delete) ZellijCli.DeleteSession(_name);
+        // Toast what happened, not what was attempted. This said "Killed x"
+        // unconditionally - including when zellij was never found, when the
+        // session did not exist, and when the call timed out.
+        var ok = ZellijCli.KillSession(_name);
+        if (ok && _delete) ok = ZellijCli.DeleteSession(_name);
+
+        if (!ok)
+        {
+            return CommandResult.ShowToast(
+                $"Could not {(_delete ? "delete" : "kill")} {_name} - see palette.log");
+        }
         return CommandResult.ShowToast(_delete ? $"Deleted {_name}" : $"Killed {_name}");
     }
 }

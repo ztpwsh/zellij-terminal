@@ -15,8 +15,17 @@
       The TargetFramework's platform version must match a Windows SDK actually
       installed, not the minimum you want to support: cswinrt reads
       Windows Kits\10\Platforms\UAP\<version>\Platform.xml and fails with
-      "Could not read the Windows SDK's Platform.xml" if it is absent. Only
-      10.0.26100.0 is installed here. MinVersion is what sets the floor.
+      "Could not read the Windows SDK's Platform.xml" if it is absent.
+
+      So this number is a BUILD REQUIREMENT rather than a preference: whoever
+      builds this needs Windows SDK 10.0.26100 specifically, and a newer one
+      does not substitute. cmdpal/README.md lists it with its winget id.
+      Changing it here changes what every builder must install.
+
+      (It used to say "only 10.0.26100.0 is installed here", which told a
+      reader nothing about their own machine.)
+
+      TargetPlatformMinVersion is what sets the floor for RUNNING it.
     -->
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>

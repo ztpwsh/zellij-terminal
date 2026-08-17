@@ -211,14 +211,25 @@ Describe 'Get-ZtWtWindowPreference' {
 
 Describe 'Where Windows Terminal keeps settings.json' {
 
-    It 'the module looks in all three locations' {
+    It 'the module has ONE list of the three locations, and every reader uses it' {
         # Store, Preview and unpackaged. A Scoop or portable install keeps its
         # settings ONLY in the third, and leaving it out made the checks that
         # depend on it report "not found - skipped" on exactly the installs
         # they were written for.
+        #
+        # This used to grep the whole file for the three strings, which passed
+        # while TWO other readers carried their own two-entry copies that
+        # omitted the unpackaged path - the file contained all three, just not
+        # in the places that mattered. Now: the list exists exactly once, and no
+        # reader builds its own.
         $script:Core | Should -Match 'Microsoft\.WindowsTerminal_8wekyb3d8bbwe'
         $script:Core | Should -Match 'Microsoft\.WindowsTerminalPreview_8wekyb3d8bbwe'
         $script:Core | Should -Match 'Microsoft\\Windows Terminal\\settings\.json'
+
+        $stable = @([regex]::Matches($script:Core, 'Microsoft\.WindowsTerminal_8wekyb3d8bbwe')).Count
+        $stable | Should -Be 1 -Because (
+            "the settings.json locations must be listed once, in Get-ZtTerminalProfilePaths - $stable copies found, " +
+            'and a second copy is how the unpackaged path came to be missing from two readers')
     }
 
     It 'Test-Setup.ps1 mirrors that list, because it cannot import the module' {
@@ -246,18 +257,28 @@ Describe 'What zac must keep doing' {
         # processes under separate names, so knowing only WindowsTerminal read
         # those machines as having nothing hosting the session and sent zac down
         # the branch that opens a second mirrored client.
-        $script:Core | Should -Match 'WindowsTerminal\.exe'
-        $script:Core | Should -Match 'WindowsTerminalPreview\.exe'
-        $script:Core | Should -Match 'WindowsTerminalCanary\.exe'
+        #
+        # PIN THE ASSIGNMENT, NOT THE TOKENS. The first version of this test
+        # matched the three names anywhere in Core.ps1 read raw - and the
+        # COMMENTS above the code name all three, so deleting them from the
+        # actual list would have left this green. A pin satisfied by prose is
+        # not a pin; it is the same reporting-success-without-checking this file
+        # was written to prevent, one level up.
+        $script:Core | Should -Match "\`$terminals\s*=\s*'WindowsTerminal\.exe',\s*'WindowsTerminalPreview\.exe',\s*'WindowsTerminalCanary\.exe'"
     }
 
     It 'agrees with the pad script about what those processes are called' {
         # pad/macropad.ahk matches the same three to decide whether the chord
         # arrived in a terminal. Two lists of the same three names, and nothing
         # holding them together, is how the module came to know only one.
+        #
+        # Comments stripped from both sides first, for the reason above.
+        $coreCode = ($script:Core -split "`r?`n" | Where-Object { $_.TrimStart() -notlike '#*' }) -join "`n"
+        $ahkCode  = ($script:Ahk  -split "`r?`n" | Where-Object { $_.TrimStart() -notlike ';*' }) -join "`n"
+
         foreach ($name in 'WindowsTerminal', 'WindowsTerminalPreview', 'WindowsTerminalCanary') {
-            $script:Ahk  | Should -Match ([regex]::Escape($name + '.exe'))
-            $script:Core | Should -Match ([regex]::Escape($name + '.exe'))
+            $ahkCode  | Should -Match ([regex]::Escape($name + '.exe'))
+            $coreCode | Should -Match ([regex]::Escape($name + '.exe'))
         }
     }
 
@@ -273,6 +294,40 @@ Describe 'What zac must keep doing' {
         # Machine-independent: whatever is or is not running here, no terminal
         # is hosting a client of a session with this name.
         (& $script:M { Get-ZtTerminalHostingSession -Session 'zt-no-such-session-xyz' }) | Should -BeNullOrEmpty
+    }
+
+    It 'finds the terminal hosting a session that IS running here' {
+        # THE NEGATIVE CONTROL. Without this, a function that returned $null
+        # unconditionally would satisfy the test above and prove nothing - the
+        # same false green this file exists to refuse.
+        #
+        # It needs a real session in a real Terminal, which a CI runner has
+        # neither of, so it skips rather than asserting. A skip that names its
+        # reason is honest; a test that passes vacuously is not.
+        $sessions = if (Get-Command zellij -ErrorAction SilentlyContinue) {
+            (& zellij list-sessions 2>&1 | Out-String)
+        } else { '' }
+
+        $name = $null
+        foreach ($line in ($sessions -replace "`e\[[0-9;]*m", '' -split "`r?`n")) {
+            $m = [regex]::Match($line.Trim(), '^(?<n>\S+)\s+\[Created\s')
+            if ($m.Success -and $line -notmatch 'EXITED') { $name = $m.Groups['n'].Value; break }
+        }
+
+        if (-not $name) {
+            Set-ItResult -Skipped -Because 'no live zellij session on this machine to find a terminal for'
+            return
+        }
+
+        $hostPid = & $script:M { param($s) Get-ZtTerminalHostingSession -Session $s } $name
+        if (-not $hostPid) {
+            Set-ItResult -Skipped -Because "session '$name' is not being hosted by a Windows Terminal here"
+            return
+        }
+
+        $proc = Get-Process -Id $hostPid -ErrorAction SilentlyContinue
+        $proc | Should -Not -BeNullOrEmpty -Because 'the returned id must be a live process'
+        $proc.Name | Should -BeIn @('WindowsTerminal', 'WindowsTerminalPreview', 'WindowsTerminalCanary')
     }
 
     It 'does not decide anything from wt.exe exit codes' {

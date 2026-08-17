@@ -10,10 +10,10 @@
 | `zt uninstall` | remove what the installer added; `-WhatIf` first, `-Purge` for registrations too, `-Force` when nothing can prompt |
 | `zt` | list this device's workspaces and their state |
 | `zt ls` / `zt all` / `zt waiting` | filtered lists; `all` includes ones this device can't reach |
-| `zt add [path]` | register a folder for Claude (defaults to here) |
+| `zt add [path]` — also `register` | register a folder for Claude (defaults to here) |
 | `zt add . -Kind pwsh -Command '…'` | register a command instead; omit `-Command` for a bare shell |
 | `zt add -FromBookmarks` | import Windows Terminal profiles that launch Claude; `-Filter` by name, `-IncludeAll` for the rest |
-| `zt rm <id>` | unregister; also stops it unless `-KeepRunning` |
+| `zt rm <id>` — also `remove`, `unregister`, `forget` | unregister; also stops it unless `-KeepRunning`. The **directory is untouched** |
 | `zt publish <id>` | promote a device entry to the shared config |
 | `zt start <id>` | open its tab and run it; `-Resume` for the previous Claude session |
 | `zt stop <id>` | Ctrl+C what's running, leave the tab as a shell |
@@ -53,6 +53,11 @@ Start-ZellijTerminal -Full` for the parameters. States are `running`,
 Per workspace: `Enter` go to, `Ctrl+S` start, `Ctrl+T` stop, `Ctrl+R` restart,
 `Ctrl+F` raise/lower its hand, `Ctrl+E` open folder, `Ctrl+Shift+C` copy path,
 `Ctrl+W` close tab, `Ctrl+D` unregister. No `Ctrl+Alt` - that is AltGr here.
+
+Every one of those is the command of the same name: `Ctrl+W` is `zt close`,
+`Ctrl+D` is `zt unregister`. The two surfaces answer to the same words on
+purpose - the CLI learned `register`, `unregister` and `forget` precisely
+because the palette teaches those and `zt add` / `zt rm` did not accept them.
 
 Build and install with `cmdpal\pack.ps1`. See `cmdpal/README.md`.
 

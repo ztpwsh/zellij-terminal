@@ -167,12 +167,16 @@ if ($zjSess) {
     if ($null -eq $tabId) {
         # Candidates, nearest first. Bounded: past a handful of levels this is
         # matching coincidences rather than the project a session belongs to.
+        # Carry the DIRECTORY each candidate came from, not just its name. The
+        # tab name gets corrected below when a subfolder session matches an
+        # ancestor's tab, and the live record has to be keyed by that same
+        # ancestor or the correction is only half done - see $keyPath.
         $candidates = @()
         $walk = $cwd
         for ($d = 0; $d -lt 6 -and $walk; $d++) {
             $leaf = Split-Path $walk -Leaf
             if (-not $leaf) { break }
-            $candidates += ($Prefix + $leaf)
+            $candidates += New-Object psobject -Property @{ Name = ($Prefix + $leaf); Path = $walk }
             $up = Split-Path $walk -Parent
             if (-not $up -or $up -eq $walk) { break }
             $walk = $up
@@ -192,7 +196,12 @@ if ($zjSess) {
 
         $tabId = -1
         foreach ($c in $candidates) {
-            if ($live.ContainsKey($c)) { $tab = $c; $tabId = $live[$c]; break }
+            if ($live.ContainsKey($c.Name)) {
+                $tab     = $c.Name
+                $tabId   = $live[$c.Name]
+                $keyPath = $c.Path
+                break
+            }
         }
     }
 
@@ -201,10 +210,24 @@ if ($zjSess) {
     $project = $tab -replace ('^' + [regex]::Escape($Prefix)), ''
 }
 
+# THE RECORD IS KEYED BY THE PROJECT, NOT BY WHERE THE SESSION IS SITTING.
+#
+# The tab name is corrected above when a session runs in a subfolder - a session
+# in F:\proj\cmdpal derives claude-cmdpal, no such tab exists, and the walk finds
+# the ancestor whose tab does. The record used to be written from the raw cwd
+# anyway, so the two halves disagreed: `zt` matches records to workspaces by key
+# alone, so the workspace registered at F:\proj never saw a record and reported
+# stopped while its session was plainly running - and the orphan record under the
+# subfolder key got offered as a workspace of its own.
+#
+# $keyPath is the directory whose tab was matched, and falls back to the cwd when
+# nothing was corrected, which is every ordinary session.
+if (-not $keyPath) { $keyPath = $cwd }
+
 $liveBase = $env:LOCALAPPDATA
 if (-not $liveBase) { $liveBase = $env:TEMP }
 $liveDir  = Join-Path $liveBase 'ZellijTerminal\live'
-$liveFile = Join-Path $liveDir ((Get-ZtKeyForPath $cwd) + '.json')
+$liveFile = Join-Path $liveDir ((Get-ZtKeyForPath $keyPath) + '.json')
 
 if ($hookEvent -eq 'SessionEnd') {
     Remove-Item -LiteralPath $liveFile -Force -ErrorAction SilentlyContinue
@@ -214,8 +237,8 @@ elseif ($hookEvent -eq 'SessionStart') {
         New-Item -ItemType Directory -Path $liveDir -Force | Out-Null
     }
     [ordered]@{
-        key       = (Get-ZtKeyForPath $cwd)
-        cwd       = $cwd
+        key       = (Get-ZtKeyForPath $keyPath)
+        cwd       = $keyPath
         tab       = $tab
         kind      = 'claude'
         sessionId = $sessionId

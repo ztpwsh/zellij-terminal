@@ -210,7 +210,7 @@ Both exist because guessing costs hours and these cost seconds.
 | `zt uninstall` | remove everything the installer added; `-WhatIf` first |
 | `zt export [path]` · `zt import <file>` | back up your setup, or move it to another machine |
 | `zt` · `zt ls` · `zt waiting` | list, filtered |
-| `zt add [path]` · `zt rm <id>` | register, unregister |
+| `zt add [path]` · `zt unregister <id>` | register, unregister — `register`, `rm`, `remove` and `forget` all work, and the folder is never touched |
 | `zt add . -Kind pwsh -Command '…'` | a command instead of Claude; omit `-Command` for a bare shell |
 | `zt add -FromBookmarks` | import your Windows Terminal profiles as workspaces |
 | `zt start` · `stop` · `restart` · `close` | lifecycle; omit the id for a picker |

@@ -380,9 +380,12 @@ function Test-ZellijTerminalConfig {
             if (-not (Get-ZtProp $w 'root') -and -not (Get-ZtProp $w 'abs')) {
                 $problems += "$($spec.Name): '$id' has neither a root nor an absolute path"
             }
-            if ((Get-ZtProp $w 'kind') -eq 'pwsh' -and -not (Get-ZtProp $w 'command')) {
-                $problems += "$($spec.Name): '$id' is kind pwsh with no command - it would open an empty shell"
-            }
+            # `-Kind pwsh` with no command is NOT a problem. It used to be an
+            # error and was deliberately made valid - Registry.ps1 says so, and
+            # `zt help` advertises it: "a shell in this folder, running nothing".
+            # Reporting a documented, supported configuration as a fault teaches
+            # people to skim past this command's output, which costs more than
+            # the check could ever save.
         }
     }
 

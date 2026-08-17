@@ -26,11 +26,23 @@ internal static class ZellijCli
         {
             if (_exe is not null) return _exe;
 
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            // The places zellij actually lands on Windows. This was one entry -
+            // the installer's own - so a winget or cargo install fell straight
+            // through to bare "zellij.exe" and depended on the palette process
+            // having inherited a PATH that includes it, which is precisely the
+            // assumption the module refuses to make.
             var candidates = new[]
             {
+                Path.Combine(local, "Zellij", "zellij.exe"),
+                Path.Combine(local, "Microsoft", "WinGet", "Links", "zellij.exe"),
                 Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Zellij", "zellij.exe"),
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".cargo", "bin", "zellij.exe"),
+                Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    "zellij", "zellij.exe"),
             };
             foreach (var c in candidates)
             {
@@ -38,7 +50,11 @@ internal static class ZellijCli
             }
 
             // Last resort: let the OS resolve it, and accept that it may not.
+            // Logged, because "zellij was never found" and "the session is not
+            // running" produce the same empty answer everywhere downstream, and
+            // only this line can tell them apart afterwards.
             _exe = "zellij.exe";
+            ZtCli.Log("zellij.exe not found in any known location - falling back to PATH");
             return _exe;
         }
     }
@@ -75,24 +91,66 @@ internal static class ZellijCli
         return result;
     }
 
-    private static string RunUncached(string args, int timeoutMs)
+    private static string RunUncached(string args, int timeoutMs) => Exec(args, timeoutMs).Out;
+
+    /// <summary>
+    /// Run zellij and report BOTH whether it worked and what it said. Actions
+    /// need the first, queries the second; conflating them is how kill-session
+    /// came to report success on a session that was never there.
+    /// </summary>
+    private static bool RunOk(string args, int timeoutMs = 4000)
+    {
+        var r = Exec(args, timeoutMs);
+        ZtCli.Log($"{(r.Ok ? "exit 0 " : "FAILED ")} zellij {args}");
+        return r.Ok;
+    }
+
+    private static (bool Ok, string Out) Exec(string args, int timeoutMs)
     {
         try
         {
             var psi = new ProcessStartInfo(Exe, args)
             {
                 RedirectStandardOutput = true,
-                RedirectStandardError = true,
+
+                // NOT redirected. Redirecting a stream nobody reads is how a
+                // child deadlocks: zellij fills the stderr pipe buffer, blocks
+                // writing, never exits, and the ReadToEnd below never returns -
+                // so the timeout on the next line cannot fire, because control
+                // has not reached it. Either read both streams or redirect
+                // neither; nothing here wants stderr, so it goes to the void
+                // with the parent's own handle.
+                RedirectStandardError = false,
+
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
             using var p = Process.Start(psi);
-            if (p is null) return string.Empty;
+            if (p is null) return (false, string.Empty);
+
+            // Wait FIRST, then read. ReadToEnd on a process that never exits
+            // blocks forever regardless of any timeout after it, and a hung
+            // zellij would have taken the dock band with it.
+            if (!p.WaitForExit(timeoutMs))
+            {
+                ZtCli.Log($"TIMEOUT after {timeoutMs}ms  zellij {args}");
+                try { p.Kill(entireProcessTree: true); } catch (Exception ex) { ZtCli.Log($"kill failed: {ex.Message}"); }
+                return (false, string.Empty);
+            }
+
             var stdout = p.StandardOutput.ReadToEnd();
-            if (!p.WaitForExit(timeoutMs)) return string.Empty;
-            return p.ExitCode == 0 ? stdout : string.Empty;
+            return (p.ExitCode == 0, p.ExitCode == 0 ? stdout : string.Empty);
         }
-        catch { return string.Empty; }
+        catch (Exception ex)
+        {
+            // Was: catch { return string.Empty; }. Every zellij-direct action -
+            // go-to-tab, the accept/reject keystrokes, kill and delete session -
+            // came through here and could fail in total silence, while the
+            // README told the reader that an empty palette.log means the palette
+            // itself is broken.
+            ZtCli.Log($"FAILED  zellij {args} ({ex.GetType().Name}: {ex.Message})");
+            return (false, string.Empty);
+        }
     }
 
     /// <summary>
@@ -184,9 +242,11 @@ internal static class ZellijCli
         return result;
     }
 
-    internal static void KillSession(string name) => Run($"kill-session {name}");
+    // Return whether it worked. These used to be void, and the caller toasted
+    // "Killed x" whether zellij had killed anything, refused, or never run.
+    internal static bool KillSession(string name) => RunOk($"kill-session {name}");
 
-    internal static void DeleteSession(string name) => Run($"delete-session {name} --force");
+    internal static bool DeleteSession(string name) => RunOk($"delete-session {name} --force");
 }
 
 

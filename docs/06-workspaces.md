@@ -20,7 +20,7 @@ zt start api          # open its tab and run its command
 zt stop api           # Ctrl+C what is running, keep the shell
 zt restart api        # stop, then resume the same Claude session
 zt close api          # close the tab, keep the registration
-zt rm api             # forget it entirely
+zt unregister api     # forget it - the folder is untouched. Also: rm, remove, forget
 zt go                 # jump to whoever is waiting
 zac                   # attach, or focus the window already attached
 zt help               # the rest

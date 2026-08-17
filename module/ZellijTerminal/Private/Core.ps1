@@ -384,18 +384,34 @@ function Get-ZtTabName {
     return ($Prefix + (Split-Path $Path -Leaf))
 }
 
+function Get-ZtTerminalProfilePaths {
+    <#
+        EVERY Windows Terminal settings.json on this machine, in preference
+        order: Store, Preview, unpackaged.
+
+        One list, because there were three. Two other readers carried their own
+        two-entry copies that omitted the unpackaged path, so a Scoop or
+        portable Terminal - which keeps its settings ONLY there - was invisible
+        to them while this function found it. The test that was supposed to pin
+        the three together grepped the whole FILE, so the copies satisfied it
+        from this function's list and the drift was undetectable.
+    #>
+    return @(
+        @(
+            (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json'),
+            (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json'),
+            (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json')
+        ) | Where-Object { Test-Path -LiteralPath $_ }
+    )
+}
+
 function Get-ZtTerminalProfilePath {
     <#
-        Windows Terminal's settings.json. Store, Preview and unpackaged builds
-        keep it in different places and a machine may have more than one; take
-        the first that exists rather than assuming the Store build.
+        The first settings.json that exists, or $null. A machine may have more
+        than one; callers that must read them all use the plural above.
     #>
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json'),
-        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json')
-    )
-    foreach ($c in $candidates) { if (Test-Path -LiteralPath $c) { return $c } }
+    $all = @(Get-ZtTerminalProfilePaths)
+    if ($all.Count -gt 0) { return $all[0] }
     return $null
 }
 
@@ -801,18 +817,14 @@ function Get-ZtWtDefaultProfile {
         comments. Returns $null when it cannot be read, and the caller then
         omits --profile and behaves exactly as before.
     #>
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json')
-        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json')
-    )
-
-    foreach ($p in $candidates) {
-        if (-not (Test-Path -LiteralPath $p)) { continue }
+    foreach ($p in (Get-ZtTerminalProfilePaths)) {
         try {
             $text = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
             $m    = [regex]::Match($text, '"defaultProfile"\s*:\s*"([^"]+)"')
             if ($m.Success) { return $m.Groups[1].Value }
-        } catch { }
+        } catch {
+            Write-Verbose "Could not read '$p': $($_.Exception.Message)"
+        }
     }
     return $null
 }
@@ -850,15 +862,13 @@ function Get-ZtWtProfile {
     # records the profiles it discovers in settings.json, so that file is the
     # honest answer to "is this profile real yet".
     if (Test-Path -LiteralPath (Get-ZtWtFragmentPath)) {
-        foreach ($p in @(
-            (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json')
-            (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json')
-        )) {
-            if (-not (Test-Path -LiteralPath $p)) { continue }
+        foreach ($p in (Get-ZtTerminalProfilePaths)) {
             try {
                 $text = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
                 if ($text -match ('"name"\s*:\s*"' + [regex]::Escape($Name) + '"')) { return $Name }
-            } catch { }
+            } catch {
+                Write-Verbose "Could not read '$p': $($_.Exception.Message)"
+            }
         }
     }
 
@@ -958,6 +968,14 @@ function Get-ZtTabNames {
 
     $r = Invoke-ZtZellij -Session $Session -ZArgs @('query-tab-names')
     if (-not $r.Ok) { return @() }
+
+    # Same trap as list-clients, same answer. A missing session prints
+    # "Session 'x' not found. The following sessions are active:" followed by
+    # the session list, AND EXITS 0 - so this returned that prose as a list of
+    # tab names, and every caller deciding "does tab X exist" got a confident
+    # wrong answer built from other sessions' names.
+    if ($r.Output -match "Session '.*' not found") { return @() }
+
     return @(
         $r.Output -split "`r?`n" |
             ForEach-Object { Get-ZtTabBase ($_.Trim()) } |
@@ -985,12 +1003,31 @@ function Get-ZtLiveTabName {
 }
 
 function Test-ZtSession {
+    <#
+        Is there a session with EXACTLY this name?
+
+        It used to regex the whole `list-sessions` output for the name, which
+        matches a substring of any other session. Demonstrated on this machine,
+        with sessions 'claude' and 'auspicious-pigeon' live: the old expression
+        answered True for 'auspicious', which is not a session - and would have
+        answered True for 'laud'. Zellij names unattended sessions after random
+        animals, so collisions are ordinary rather than contrived.
+
+        The name is the first field of each row, before " [Created ...]".
+    #>
     param([string]$Session)
+
     # No zellij means no session, which is an answer. See Invoke-ZtZellij for
     # why this is a return value here rather than an exception.
     if (-not (Get-Command zellij -ErrorAction SilentlyContinue)) { return $false }
-    $list = & zellij list-sessions 2>&1 | Out-String
-    return ($list -match [regex]::Escape($Session))
+
+    $raw   = & zellij list-sessions 2>&1 | Out-String
+    $clean = $raw -replace "`e\[[0-9;]*m", ''
+    foreach ($line in ($clean -split "`r?`n")) {
+        $m = [regex]::Match($line.Trim(), '^(?<name>\S+)\s+\[Created\s')
+        if ($m.Success -and $m.Groups['name'].Value -eq $Session) { return $true }
+    }
+    return $false
 }
 
 function Measure-ZtClientRows {
