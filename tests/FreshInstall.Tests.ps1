@@ -24,6 +24,17 @@
       every file it wrote is correct. On CI, which has no Zellij at all, this is
       as close to a fresh Windows box as a test can get.
 
+    IT EARNED ITS PLACE WITHIN MINUTES
+      The first release carrying this file went red on CI, on the installer's
+      own new verification step. That step asked whether the module resolved by
+      NAME, via Get-Module -ListAvailable, which searches $env:PSModulePath - so
+      it reported OK on every development machine, where a ZellijTerminal was
+      already on that path from an earlier install, and BAD on a clean runner
+      installing to a directory that is not on it. A check passing for a reason
+      unrelated to what the installer just did is precisely the failure this
+      file exists to catch, and it caught it in its first hour, in the one place
+      that could: a machine with none of the state.
+
     WHAT IT DELIBERATELY DOES NOT ASSERT
       Anything needing a live session: a client attached, a tab open, a rendered
       status bar. Those are false one second after a real install too, and a

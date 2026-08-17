@@ -684,11 +684,36 @@ function Test-ZtClaim {
     }
 }
 
-# The module has to be loadable by NAME, not merely present: the junction is
-# the whole point of step 1, and a junction to the wrong tree resolves happily
-# while running somebody else's code.
-$modOk = @(Get-Module -ListAvailable ZellijTerminal -ErrorAction SilentlyContinue).Count -gt 0
-Test-ZtClaim 'zt module resolves' $modOk 'nothing on the module path; open a new shell, or re-run with -Force'
+# Ask about the destination THIS RUN used, not about the name.
+#
+# The first version of this check called Get-Module -ListAvailable, which
+# searches $env:PSModulePath - so with -ModulePath pointing anywhere else it
+# reported BAD on a perfectly good install, and on a developer's machine it
+# reported OK because a ZellijTerminal was already on that path from some
+# earlier install. Passing for a reason unrelated to what the installer just
+# did is the exact failure this whole verification step exists to catch, and it
+# was caught by CI within minutes of shipping, on a runner with no pre-existing
+# module. Worth leaving written down: the machine you develop on is the one
+# machine that cannot tell you whether your install works.
+#
+# The destination is asked of the MODULE rather than recomputed here.
+# Resolve-ZtUserModulePath does not guess: it takes the user-scope entry
+# already on PSModulePath, because Documents is redirected under OneDrive on
+# some profiles - including one of this project's own machines - and a guessed
+# path installs where PowerShell never looks. Writing a second version of that
+# rule here would be a fourth copy of it, and this repo already pins three
+# copies of one path rule together for exactly this reason.
+#
+# It is not exported, so it is called inside the module's own scope. The module
+# was imported from source in step 1; if that failed, the failure is already in
+# $problems and there is nothing here to verify.
+$modZt = Get-Module ZellijTerminal
+if ($modZt) {
+    $modBase = $ModulePath
+    if (-not $modBase) { $modBase = & $modZt { Resolve-ZtUserModulePath } }
+    $modDest = Join-Path $modBase 'ZellijTerminal'
+    Test-ZtClaim 'zt module installed' (Test-Path -LiteralPath $modDest) "nothing at $modDest - re-run with -Force"
+}
 
 if (-not $SkipZellijConfig) {
     $zjConfigDir2 = Join-Path $env:APPDATA (Join-Path 'Zellij' 'config')
