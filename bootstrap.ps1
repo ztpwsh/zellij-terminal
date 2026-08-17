@@ -77,8 +77,51 @@ if (Test-Path -LiteralPath $dest) {
     try {
         # git writes ordinary progress to stderr; let it through rather than
         # letting PowerShell dramatise it as an error.
-        git pull --ff-only
-        if ($LASTEXITCODE -ne 0) { throw "git pull failed ($LASTEXITCODE)" }
+        git fetch origin
+        if ($LASTEXITCODE -ne 0) { throw "git fetch failed ($LASTEXITCODE)" }
+
+        # Whatever this clone is actually on, rather than assuming 'main' - a
+        # fork may publish from somewhere else.
+        $branch = (git symbolic-ref --short HEAD)
+        if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = 'main' }
+        $branch = $branch.Trim()
+
+        git merge --ff-only "origin/$branch"
+        if ($LASTEXITCODE -ne 0) {
+            # THIS REPOSITORY'S HISTORY IS REBUILT, NOT APPENDED TO. It is
+            # generated output: tools/Publish-Release.ps1 rewrites the branch
+            # from a manifest and force-pushes it whenever a published blob has
+            # to stop being recoverable. An older clone then has genuinely
+            # unrelated history and can NEVER fast-forward again, so
+            # `git pull --ff-only` failed here permanently and told the user
+            # only "Not possible to fast-forward, aborting" - which reads as a
+            # bug in their clone rather than as the expected consequence of a
+            # rebuild. Reported from a real machine stuck on f28fccb.
+            #
+            # Resetting is the honest thing: nobody should be editing this
+            # clone, it is an install source. But check first, because "nobody
+            # should" is not "nobody does", and config/workspaces.json is a
+            # tracked file people do reasonably edit.
+            $dirty = @(git status --porcelain --untracked-files=no | Where-Object { $_ })
+            if ($dirty.Count -gt 0) {
+                throw ("The published history was rebuilt, so this clone cannot be updated in place, " +
+                       "and it has $($dirty.Count) local change(s) that a reset would destroy:`n" +
+                       ($dirty -join "`n") + "`n`n" +
+                       "Move them somewhere safe, then re-run this. Or, to discard them: `n" +
+                       "  git -C $dest reset --hard origin/$branch")
+            }
+
+            Write-Host '  Published history was rebuilt - resetting the clone to match.' -ForegroundColor Yellow
+            git reset --hard "origin/$branch"
+            if ($LASTEXITCODE -ne 0) { throw "git reset --hard origin/$branch failed ($LASTEXITCODE)" }
+
+            # Deliberately no `git clean`. A clone from before 0.6 can still
+            # hold config/devices/<HOST>.json - a real device registry, now
+            # untracked because that file moved to %LOCALAPPDATA% - and
+            # deleting a registry to tidy up a checkout is not a trade this
+            # script gets to make. A stale untracked file is harmless; nothing
+            # reads it.
+        }
     } finally {
         Pop-Location
     }
