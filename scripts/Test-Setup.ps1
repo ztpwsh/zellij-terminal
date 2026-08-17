@@ -542,6 +542,39 @@ if (Test-Path -LiteralPath $zjLayout) {
         } else {
             Add-Result '4 hooks' 'zjstatus plugin' 'FAIL' "Layout references zjstatus but $wasm is missing"
         }
+
+        # A PLUGIN THAT IS PRESENT IS NOT A PLUGIN THAT MAY RUN. Zellij holds an
+        # ungranted plugin pending approval and renders the prompt in the
+        # plugin's own pane - one row, borderless, in a session that starts
+        # locked. The dialog cannot draw there and no keystroke reaches it, so
+        # the bar is simply absent: no prompt, no error, nothing logged.
+        #
+        # This check exists because every other line in this table passed on a
+        # machine with no status bar. The grant is acquired interactively and
+        # cached outside both the clone and %APPDATA%, so every development
+        # machine had one and nothing that ships did - the exact shape of
+        # failure a layer check is supposed to catch and could not.
+        #
+        # Mirrors install.ps1, which writes it. tests/Permissions.Tests.ps1
+        # pins the two together, because a check reading a different path from
+        # the writer reports a missing grant on a machine that has one.
+        $permPath = Join-Path $env:LOCALAPPDATA 'Zellij\cache\permissions.kdl'
+        $permKey  = $wasm -replace '\\', '/'
+        if (Test-Path -LiteralPath $permPath) {
+            $permText = Get-Content -LiteralPath $permPath -Raw -ErrorAction SilentlyContinue
+            if (-not $permText) { $permText = '' }
+            if ($permText -match [regex]::Escape($permKey)) {
+                Add-Result '4 hooks' 'zjstatus permitted' 'PASS' 'Zellij has a plugin permission grant for it'
+            } else {
+                Add-Result '4 hooks' 'zjstatus permitted' 'FAIL' (
+                    "No grant for $permKey in $permPath - the plugin loads and waits for " +
+                    'an approval prompt that cannot be shown in a one-row pane. Fix: re-run install.ps1')
+            }
+        } else {
+            Add-Result '4 hooks' 'zjstatus permitted' 'FAIL' (
+                "$permPath does not exist, so no plugin is permitted to run - the bar " +
+                'will be absent with no prompt and no error. Fix: re-run install.ps1')
+        }
     }
 } else {
     Add-Result 'env' 'Claude layout' 'WARN' "Not at $zjLayout - default_layout `"claude`" will fail to start"

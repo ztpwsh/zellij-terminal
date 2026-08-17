@@ -52,6 +52,14 @@ layout {
     // Install: download zjstatus.wasm from github.com/dj95/zjstatus/releases
     // into %APPDATA%\Zellij\data\plugins\ . Verified with v0.24.0.
     //
+    // AND GRANT IT PERMISSION. Zellij holds an ungranted plugin pending
+    // approval and draws the prompt IN THIS PANE - which is one row,
+    // borderless, in a session that starts locked, so the dialog cannot render
+    // and no keystroke reaches it to accept. The bar is then absent with no
+    // prompt, no error and nothing logged, on a machine where this file and
+    // the wasm are both correct. install.ps1 writes the grant to
+    // %LOCALAPPDATA%\Zellij\cache\permissions.kdl; `zt check` reports it.
+    //
     // Delete this whole default_tab_template block if you don't want it - the
     // flag files and key 3 work fine without a status bar.
     //

@@ -72,9 +72,10 @@ param(
 # there - are the ones whose absence is the finding.
 $ErrorActionPreference = 'Continue'
 
-$script:Report   = New-Object System.Text.StringBuilder
-$script:Signals  = New-Object System.Collections.ArrayList
-$script:Failures = New-Object System.Collections.ArrayList
+$script:Report      = New-Object System.Text.StringBuilder
+$script:Signals     = New-Object System.Collections.ArrayList
+$script:Failures    = New-Object System.Collections.ArrayList
+$script:PluginPaths = @()
 
 # ---------------------------------------------------------------------------
 #  Writing the bundle
@@ -698,6 +699,11 @@ Invoke-Section 'layout' {
         if ($fsPath -match '^[A-Za-z]:\\') {
             $exists = Test-Path -LiteralPath $fsPath
             Add-Fact '  resolves to' ($fsPath + '  -- exists: ' + $exists)
+
+            # Handed to section 6, which asks whether Zellij is allowed to RUN
+            # it. Taken from the layout rather than recomputed, because the
+            # grant is keyed by the path the layout actually names.
+            $script:PluginPaths += $fsPath
             if (-not $exists) {
                 Add-Signal ('The layout points its plugin at ' + $fsPath + ', which is not there. Zellij does not report this; the bar is simply absent.')
             }
@@ -866,6 +872,71 @@ Invoke-Section 'plugin' {
         } catch {
             Add-Fact 'Version strings found inside the binary' ('could not read: ' + $_.Exception.Message)
         }
+    }
+
+    # --- may Zellij RUN it? -------------------------------------------------
+    #
+    # THE QUESTION THIS SECTION USED TO STOP ONE DIRECTORY SHORT OF. Zellij
+    # gates plugins behind a permission grant kept in its CACHE directory,
+    # under %LOCALAPPDATA% - not under %APPDATA%, which is all this section
+    # listed. Without a grant the plugin loads and waits for an approval prompt
+    # that renders in its own pane: one row, borderless, in a session that
+    # starts locked. Nothing can draw or answer there, so the bar is absent
+    # with no prompt, no error and nothing in any log.
+    #
+    # It is acquired interactively and once, which is why every development
+    # machine had one and nothing that ships did. A bundle from a machine with
+    # a correct layout, a byte-identical wasm and a clean `zt check` still had
+    # no bar, and this file was the difference.
+    Add-Line ''
+    Add-Line '### Plugin permission grant'
+    Add-Line ''
+
+    $permPath = Join-Path $env:LOCALAPPDATA (Join-Path 'Zellij' (Join-Path 'cache' 'permissions.kdl'))
+    $perm     = Add-FileFacts 'permissions.kdl' $permPath
+    $permText = Get-ZtText $permPath
+
+    if ($perm.Exists) {
+        Add-Block $permText 'kdl'
+    } else {
+        Add-Line '  Nothing is permitted to run. No plugin in any layout will start.'
+    }
+
+    # Ask about the path the LAYOUT names, not a path recomputed here: the
+    # grant is keyed by string, so a layout pointing somewhere else is
+    # ungranted however many grants the file holds.
+    $checked = @($script:PluginPaths)
+    if ($checked.Count -eq 0) { $checked = @($wasm) }
+    foreach ($p in $checked) {
+        $key = $p -replace '\\', '/'
+        $granted = $false
+        if ($permText -and ($permText -match [regex]::Escape($key))) { $granted = $true }
+        Add-Fact 'Granted' ($key + '  -- ' + $granted)
+        if (-not $granted) {
+            Add-Signal ('Zellij has no permission grant for ' + $key +
+                        ' - the plugin loads and waits for an approval prompt that cannot be shown in a one-row locked pane, so the bar is absent with no error. This is the failure a clean `zt check` cannot see.')
+        }
+    }
+
+    Add-Line ''
+    Add-Line '### Everything under %LOCALAPPDATA%\Zellij (the cache dir)'
+    Add-Line ''
+    $zjCache = Join-Path $env:LOCALAPPDATA 'Zellij'
+    if (Test-Path -LiteralPath $zjCache) {
+        # Depth-limited on purpose: the cache holds one directory per session
+        # ever created, which on a working machine is hundreds of entries and
+        # none of them evidence.
+        $cacheListing = @(Get-ChildItem -LiteralPath $zjCache -Force -ErrorAction SilentlyContinue |
+            Select-Object -First 40 |
+            ForEach-Object {
+                $size = ''
+                if (-not $_.PSIsContainer) { $size = "$($_.Length)" }
+                ('{0,-12} {1,-19} {2}' -f $size, $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm'), $_.Name)
+            })
+        $total = @(Get-ChildItem -LiteralPath $zjCache -Force -ErrorAction SilentlyContinue).Count
+        Add-Block (($cacheListing -join "`n") + "`n(top level only; $total entries)")
+    } else {
+        Add-Block 'no %LOCALAPPDATA%\Zellij directory'
     }
 
     # The whole tree, because a stale compiled-plugin cache is a real failure

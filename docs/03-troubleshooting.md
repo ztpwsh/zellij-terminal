@@ -15,6 +15,18 @@ different fixes.
 | 4 target | `dir $env:TEMP\claude-zellij-flags` after Claude stops. |
 | registry | `zt` lists workspaces; `zt sync` clears records whose tabs are gone. |
 
+**No status bar, and everything checks out.** Zellij gates plugins behind a
+permission grant kept in `%LOCALAPPDATA%\Zellij\cache\permissions.kdl` — not in
+the clone, not under `%APPDATA%`, and acquired *interactively* the first time a
+plugin loads. Without it zjstatus loads and waits for an approval prompt that
+renders in its own pane: one row, borderless, in a session that starts locked.
+Nothing can draw or answer there, so the bar is simply absent — no prompt, no
+error, nothing logged — while the layout, the plugin binary and the config are
+all provably correct. This cost a day on a second PC whose `zt check` reported
+"No failures" on every line. Re-run `install.ps1` with every session closed; the
+Zellij server owns that file while it runs. `zt check` now reports it as
+**zjstatus permitted**.
+
 **When `zt check` is clean and the rig still does not work**, run `zt diag`. It
 writes one file describing what is actually on the machine — the layer check
 asks whether each file is *there*, and the two files that decide whether this rig
