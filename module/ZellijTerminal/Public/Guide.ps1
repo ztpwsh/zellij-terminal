@@ -42,6 +42,68 @@ function Read-ZtYesNo {
     return ($a -match '^(y|yes)$')
 }
 
+function Invoke-ZtInstaller {
+    <#
+        Run install.ps1 in a CHILD PowerShell, never in this process.
+
+        install.ps1 removes and re-imports ZellijTerminal as its first real
+        step, because that is how the module gets replaced. A script invoked
+        with `&` from a module function runs inside that module's session
+        state - so removing the module throws away the scope the script's own
+        functions were defined into, and every helper it has not called yet
+        stops existing halfway through the run.
+
+        What that looks like from the outside is nothing like what it is:
+
+            zt setup -> y -> [1/3] PowerShell module -> ZellijTerminal
+            installed. -> The term 'Write-Step' is not recognized
+
+        a script failing on a function it defined at the top and used four
+        lines earlier. Both offers in this file hit it, so no guided install
+        could get past its first step.
+
+        Demonstrated rather than reasoned about: the same script run from a
+        shell completes, and run from a module function dies exactly there.
+        tests/Installer.Tests.ps1 rebuilds that pair from scratch.
+
+        A child process also has the honest lifetime. The installer's job is
+        to replace the module this function is executing from, and the copy
+        already loaded here stays loaded whatever we do - which is why
+        install.ps1 has always ended by telling you to open a new shell.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [string[]]$Arguments = @()
+    )
+
+    $script = Join-Path $Repo 'install.ps1'
+    if (-not (Test-Path -LiteralPath $script)) {
+        throw "install.ps1 is not in $Repo - is this a complete clone?"
+    }
+
+    # The pwsh running this, not whichever one is on PATH: a user with several
+    # installed should get the one they invoked zt from.
+    $exe = (Get-Process -Id $PID).Path
+    if (-not $exe -or -not (Test-Path -LiteralPath $exe)) {
+        $exe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $exe) {
+        throw "Could not find the PowerShell running this. Run it by hand: $script $($Arguments -join ' ')"
+    }
+
+    & $exe -NoProfile -File $script @Arguments
+
+    # An installer that failed and a guide that carries on to the next step is
+    # the pattern install.ps1's own $problems list exists to prevent; do not
+    # reintroduce it one process up.
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ''
+        Write-Host "      install.ps1 exited $LASTEXITCODE - that step did not complete" -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
 function Write-ZtGuideStep {
     param([string]$N, [string]$Title, [string]$State, [string]$Colour = 'DarkGray')
     Write-Host ''
@@ -253,7 +315,7 @@ function Start-ZellijTerminalSetup {
         )
         if (Read-ZtYesNo 'Write them now?' '.\install.ps1') {
             if ($PSCmdlet.ShouldProcess($layout, 'Write Zellij config and layout')) {
-                & (Join-Path $repo 'install.ps1') -SkipHook -SkipZellijCheck
+                Invoke-ZtInstaller -Repo $repo -Arguments @('-SkipHook', '-SkipZellijCheck') | Out-Null
             }
         }
     }
@@ -281,7 +343,7 @@ function Start-ZellijTerminalSetup {
         )
         if (Read-ZtYesNo 'Register the hook for every project?' '.\install.ps1 -Global') {
             if ($PSCmdlet.ShouldProcess($gp, 'Register the hook globally')) {
-                & (Join-Path $repo 'install.ps1') -Global -SkipZellijConfig -SkipZellijCheck
+                Invoke-ZtInstaller -Repo $repo -Arguments @('-Global', '-SkipZellijConfig', '-SkipZellijCheck') | Out-Null
             }
         }
     }

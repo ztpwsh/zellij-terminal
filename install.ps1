@@ -217,6 +217,14 @@ Write-Step '[1/3] PowerShell module'
 $moduleSource = Join-Path $repo (Join-Path 'module' 'ZellijTerminal')
 if (-not (Test-Path -LiteralPath $moduleSource)) { throw "Module not found at $moduleSource" }
 
+# THIS SCRIPT CANNOT BE CALLED IN-PROCESS FROM THE MODULE. A script invoked
+# with `&` from a module function runs inside that module's session state, so
+# the line below throws away the scope holding this script's own functions -
+# Write-Step, Write-Note, Write-Warn - and the run dies further down on one of
+# them being "not recognized", having used it seconds earlier. `zt setup` did
+# exactly this and could not complete a single offer. Invoke-ZtInstaller in
+# module/ZellijTerminal/Public/Guide.ps1 is the supported way in, and it starts
+# a child pwsh. Run from a shell, this is fine and always was.
 Remove-Module ZellijTerminal -Force -ErrorAction SilentlyContinue
 Import-Module $moduleSource -Force
 
