@@ -1,0 +1,149 @@
+# CI - the parts of this rig that can be checked on a machine that is not yours.
+#
+# WHAT CI CAN AND CANNOT SEE
+#   A hosted runner has no Zellij, no PowerToys, no macro pad, no Command
+#   Palette and no attached terminal. So this workflow proves two things only:
+#   the PowerShell suite in tests\ is green with none of the rig installed, and
+#   the Command Palette extension still compiles. Everything else about this
+#   project - whether a tab actually gets focus, whether the pad's chords land -
+#   is only answerable on a real desktop, and pretending otherwise in CI would
+#   produce a green tick that means nothing.
+#
+#   The suite is written to that constraint: assertions that need a session, a
+#   git identity or an installed module are guarded with -Skip, so a skip here
+#   is the design working rather than a hole.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Only the newest run of a branch matters. Windows runners are slow to start and
+# an abandoned run still occupies one, so let a fresh push cancel its
+# predecessor rather than queue behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nothing here writes to the repo. Say so, so a compromised action cannot.
+permissions:
+  contents: read
+
+jobs:
+
+  test:
+    name: Pester
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        # Set explicitly rather than relying on the runner default. The module
+        # declares PowerShellVersion 7.0 and CompatiblePSEditions Core, so the
+        # tests that import it have to run under pwsh; a step that quietly fell
+        # back to Windows PowerShell 5.1 would fail on the import, which reads
+        # like a broken module rather than a wrong shell.
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester 6 and PSScriptAnalyzer
+        run: |
+          # Majors are pinned, not exact versions: a 6.x Pester is the contract
+          # the tests are written against (Describe/Context/It, Should -Be,
+          # New-PesterConfiguration), while a 7.0 arriving on its own schedule
+          # would break the suite in a run nobody asked for.
+          #
+          # The runner image already ships an older Pester under Program Files,
+          # signed by Microsoft. Installing over it without -SkipPublisherCheck
+          # fails with "the version ... is not digitally signed by the same
+          # publisher", which is about certificates and not about anything wrong
+          # with this repo. -Scope CurrentUser keeps the new copy out of the way
+          # of the image's own.
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Pester `
+            -MinimumVersion 6.0.0 -MaximumVersion 6.9999.9999 `
+            -Scope CurrentUser -Force -SkipPublisherCheck
+
+          # No test calls Invoke-ScriptAnalyzer today. It is installed, and
+          # pinned to 1.x, so that a test which wants to lint the scripts can
+          # just call it - and so that when one does, it lints against a version
+          # this file names rather than whatever the image happens to carry.
+          Install-Module PSScriptAnalyzer `
+            -MinimumVersion 1.0.0 -MaximumVersion 1.9999.9999 `
+            -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run the suite
+        run: |
+          # Import by version bound rather than letting Invoke-Pester autoload.
+          # The image's Pester is on PSModulePath too, and "which Pester ran" is
+          # the first question when a green local suite goes red here.
+          Import-Module Pester -MinimumVersion 6.0.0 -MaximumVersion 6.9999.9999 -Force
+
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path              = './tests'
+          $cfg.Output.Verbosity      = 'Detailed'
+          $cfg.TestResult.Enabled    = $true
+          $cfg.TestResult.OutputPath = 'testResults.xml'
+
+          # Run.Exit is the half of -CI that matters: without it Pester reports
+          # failures and the step still exits 0, so a red suite ships a green
+          # tick. Per Get-Help Invoke-Pester -Parameter CI on 6.1.0, -CI is
+          # exactly TestResult.Enabled plus Run.Exit; both are spelled out here
+          # because the result path is set anyway.
+          $cfg.Run.Exit = $true
+
+          Invoke-Pester -Configuration $cfg
+
+      - name: Publish test results
+        # always(), because the run worth keeping the XML from is the one that
+        # failed. The default would skip this step for exactly that run.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-results
+          path: testResults.xml
+          if-no-files-found: error
+
+  build-extension:
+    name: Command Palette extension
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        shell: pwsh
+        run: dotnet build cmdpal/ZellijTerminal.Palette -c Release
+        # BUILD ONLY - CI DELIBERATELY DOES NOT PACK OR SIGN
+        #
+        # cmdpal\pack.ps1 does four steps: publish, makeappx, signtool, then
+        # Add-AppxPackage. Only the first survives on a hosted runner.
+        #
+        #   signing needs a certificate whose subject matches the manifest's
+        #   Publisher exactly (CN=ZellijTerminal). The private key is not going
+        #   into a public repo, and a fresh self-signed cert per run would sign
+        #   a package nobody's machine trusts.
+        #
+        #   Add-AppxPackage needs that certificate imported into
+        #   LocalMachine\TrustedPeople, which is elevation, and it needs a user
+        #   session with developer mode on. Neither exists here, and even if
+        #   they did the runner has no Command Palette to install into and is
+        #   destroyed at the end of the job.
+        #
+        # So the question this job answers is the only one CI can: does the
+        # extension still compile. Packaging stays a local step, run by hand
+        # from the machine that will use the extension.
+        #
+        # If this fails on Platform.xml rather than on C#, the runner image has
+        # lost the Windows SDK the csproj targets (10.0.26100.0) - see the
+        # comment in ZellijTerminal.Palette.csproj. That is an image change, not
+        # a code change, and the fix is to pin the runner or add the SDK.

@@ -1,0 +1,45 @@
+# Line endings, pinned rather than left to each contributor's core.autocrlf.
+#
+# Without this, cloning on a machine with autocrlf=true and then running any
+# tool that rewrites a file produces a diff touching every line, which buries
+# the real change. The stamping tool surfaced exactly that: three files came
+# back as 100 changed lines after a round trip that altered one word each.
+#
+# CRLF for the Windows-only files, because that is what they are: PowerShell
+# that only ever runs on Windows, and a Keyboard Manager config Windows itself
+# writes. LF for everything portable.
+
+*                   text=auto eol=lf
+
+*.ps1               text eol=crlf
+*.psm1              text eol=crlf
+*.psd1              text eol=crlf
+*.ahk               text eol=crlf
+*.cmd               text eol=crlf
+*.bat               text eol=crlf
+
+*.md                text eol=lf
+*.yml               text eol=lf
+*.yaml              text eol=lf
+*.json              text eol=lf
+*.kdl               text eol=lf
+*.template          text eol=lf
+*.cs                text eol=lf
+*.csproj            text eol=lf
+
+# Never normalise. A .wasm or a PNG with its newlines "fixed" is a corrupt file,
+# and the failure shows up as the status bar silently not rendering.
+*.wasm              binary
+*.png               binary
+*.jpg               binary
+*.ico               binary
+*.dll               binary
+*.exe               binary
+*.pdf               binary
+*.msix              binary
+
+# Generated or vendored: keep it out of diffs and language statistics, so the
+# repo reports as PowerShell rather than as whatever the biggest asset is.
+docs/user-guide.html    linguist-documentation
+cmdpal/**/obj/**        linguist-generated
+cmdpal/**/bin/**        linguist-generated

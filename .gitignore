@@ -1,0 +1,33 @@
+# Build output
+cmdpal/**/bin/
+cmdpal/**/obj/
+cmdpal/staging/
+cmdpal/out/
+
+# Written at runtime
+*.local
+*.log
+tmp/
+scratch/
+config/*.tmp
+config/devices/*.tmp
+
+# Test output. CI publishes testResults.xml as an artifact; nobody should
+# commit one, because a stale results file that looks green is worse than none.
+testResults.xml
+tests/**/*.results.xml
+coverage.xml
+
+# Backups install.ps1 makes before overwriting anything it did not write
+*.bak
+*.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].bak
+
+# The hook config install.ps1 generates, with absolute paths for THIS machine
+.claude/settings.json
+
+# Windows / editors
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

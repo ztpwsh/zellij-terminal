@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zt - several Claude sessions, one terminal</title>
+<style>
+  /* ---------------------------------------------------------------
+     Palette is the rig's own status colours - the exact hex values
+     claude-zj-hook.ps1 pipes to the status bar. Light theme uses the
+     darker counterparts so the same six meanings survive on paper-white.
+     --------------------------------------------------------------- */
+  :root {
+    --ground:        #EFF1F5;
+    --raised:        #E6E9EF;
+    --sunken:        #DCE0E8;
+    --edge:          #BCC0CC;
+    --ink:           #4C4F69;
+    --ink-soft:      #6C6F85;
+    --ink-faint:     #8C8FA1;
+
+    --done:          #40A02B;   /* green  - finished, your turn */
+    --needs:         #D20F39;   /* red    - asking for you */
+    --working:       #DF8E1D;   /* yellow - busy */
+    --reading:       #1E66F5;   /* blue   - reading files */
+    --agent:         #8839EF;   /* mauve  - subagent / task */
+    --shell:         #FE640B;   /* peach  - running a command */
+    --idle:          #9CA0B0;   /* grey   - idle */
+
+    --accent:        var(--agent);
+    --code-bg:       #DCE0E8;
+
+    --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #1E1E2E;
+      --raised:   #262637;
+      --sunken:   #181825;
+      --edge:     #45475A;
+      --ink:      #CDD6F4;
+      --ink-soft: #A6ADC8;
+      --ink-faint:#7F849C;
+
+      --done:     #A6E3A1;
+      --needs:    #F38BA8;
+      --working:  #F9E2AF;
+      --reading:  #89B4FA;
+      --agent:    #CBA6F7;
+      --shell:    #FAB387;
+      --idle:     #6C7086;
+
+      --code-bg:  #181825;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:   #1E1E2E;
+    --raised:   #262637;
+    --sunken:   #181825;
+    --edge:     #45475A;
+    --ink:      #CDD6F4;
+    --ink-soft: #A6ADC8;
+    --ink-faint:#7F849C;
+
+    --done:     #A6E3A1;
+    --needs:    #F38BA8;
+    --working:  #F9E2AF;
+    --reading:  #89B4FA;
+    --agent:    #CBA6F7;
+    --shell:    #FAB387;
+    --idle:     #6C7086;
+
+    --code-bg:  #181825;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.65;
+    margin: 0;
+    padding: 0 24px 96px;
+  }
+
+  .wrap { max-width: 720px; margin: 0 auto; }
+
+  /* ---- masthead ------------------------------------------------- */
+  header {
+    padding: 72px 0 40px;
+    border-bottom: 1px solid var(--edge);
+    margin-bottom: 48px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(30px, 6vw, 46px);
+    line-height: 1.1;
+    font-weight: 700;
+    margin: 0 0 20px;
+    text-wrap: balance;
+    letter-spacing: -0.02em;
+  }
+  .standfirst {
+    font-size: 19px;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 60ch;
+  }
+
+  /* ---- sections -------------------------------------------------- */
+  section { margin: 0 0 64px; }
+  h2 {
+    font-family: var(--mono);
+    font-size: 23px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    text-wrap: balance;
+  }
+  h2 .num {
+    color: var(--accent);
+    margin-right: 12px;
+  }
+  .sub {
+    color: var(--ink-faint);
+    font-size: 15px;
+    margin: 0 0 24px;
+  }
+  h3 {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 700;
+    margin: 32px 0 8px;
+  }
+  p { margin: 0 0 16px; max-width: 66ch; }
+  strong { font-weight: 650; color: var(--ink); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.87em;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.6;
+    background: var(--sunken);
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 0 0 20px;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .cmt { color: var(--ink-faint); }
+
+  /* ---- the mental-model diagram ---------------------------------- */
+  .model {
+    display: grid;
+    gap: 2px;
+    background: var(--edge);
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 0 0 20px;
+  }
+  .model-row {
+    background: var(--raised);
+    padding: 14px 18px;
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .model-row .label {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    min-width: 86px;
+  }
+  .model-row .what { font-size: 15px; color: var(--ink-soft); flex: 1; min-width: 240px; }
+
+  /* ---- key map ---------------------------------------------------- */
+  .keys { display: grid; gap: 12px; margin: 0 0 20px; }
+  @media (min-width: 620px) { .keys { grid-template-columns: 1fr 1fr; } }
+  .key {
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    padding: 16px 18px;
+    background: var(--raised);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .key .cap {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--accent);
+  }
+  .key .does { font-size: 15px; }
+  .key .chord {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+
+  /* ---- colour legend ---------------------------------------------- */
+  .legend { display: grid; gap: 8px; margin: 0 0 20px; }
+  .lg { display: flex; align-items: baseline; gap: 12px; font-size: 15px; }
+  .swatch {
+    font-family: var(--mono);
+    font-weight: 700;
+    width: 2ch;
+    text-align: center;
+    flex: none;
+  }
+  .lg .meaning { color: var(--ink-soft); }
+
+  /* ---- use cases --------------------------------------------------- */
+  .case {
+    border-left: 3px solid var(--accent);
+    padding: 2px 0 2px 20px;
+    margin: 0 0 28px;
+  }
+  .case h3 { margin-top: 0; }
+
+  /* ---- callout ----------------------------------------------------- */
+  .note {
+    background: var(--raised);
+    border: 1px solid var(--edge);
+    border-left: 3px solid var(--working);
+    border-radius: 0 6px 6px 0;
+    padding: 16px 18px;
+    margin: 0 0 20px;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--working);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .note.stop { border-left-color: var(--needs); }
+  .note.stop .tag { color: var(--needs); }
+
+  /* ---- tables ------------------------------------------------------ */
+  .tablewrap { overflow-x: auto; margin: 0 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--edge); vertical-align: top; }
+  th {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+  }
+  td code { white-space: nowrap; }
+
+  footer {
+    border-top: 1px solid var(--edge);
+    padding-top: 24px;
+    color: var(--ink-faint);
+    font-size: 14px;
+  }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">zt · Claude Code in Zellij · native Windows</p>
+  <h1>Several sessions, one terminal</h1>
+  <p class="standfirst">A guide to running more than one Claude Code session
+  without losing track of them — written for someone who has never used Zellij
+  and doesn't especially want to learn a multiplexer.</p>
+</header>
+
+<section>
+  <h2>The problem this solves</h2>
+  <p class="sub">Why one terminal is not enough, and why tabs alone don't fix it</p>
+
+  <p>Run Claude Code on one project and a single terminal is fine. Run it on
+  three and the day becomes a hunt: which one finished, which is waiting for
+  permission, which has been sitting idle for an hour because you forgot it.
+  Nothing tells you. You go and look.</p>
+
+  <p>Terminal tabs don't fix that, because a tab can't tell you it needs
+  something. What's needed is for each session to be able to <em>raise its
+  hand</em>, and for something to be watching. That is what this is.</p>
+
+  <p>Everything below assumes one <strong>Zellij session</strong> holding one
+  tab per project, with <code>zt</code> as the thing you type. A macro pad is
+  optional and comes near the end — it is where the project started, but it is
+  no longer the point of it.</p>
+</section>
+
+<section>
+  <h2>The one idea worth understanding</h2>
+  <p class="sub">Everything else follows from this</p>
+
+  <p>A macro pad can only send keystrokes to <strong>the window you are looking
+  at</strong>. That is a hardware fact, not a limitation of the software. So a
+  pad that types <code>Enter</code> can only answer a Claude Code prompt if
+  Claude Code is the thing in front of you — which rather defeats the point of
+  having a key for it.</p>
+
+  <p>Zellij dissolves that problem. It runs your shells <em>inside itself</em>,
+  and it accepts instructions over a command line from anywhere on the machine.
+  So instead of the pad typing at a window, the pad runs a command that says
+  "put an Enter into that shell." The terminal window becomes a viewport onto
+  something that exists independently of it.</p>
+
+  <p>That is the whole trick. Once input reaches the shell rather than the
+  window, the terminal no longer needs to be focused — or even visible.</p>
+</section>
+
+<section>
+  <h2>Zellij in ninety seconds</h2>
+  <p class="sub">Four words you need; ignore the rest of the manual</p>
+
+  <div class="model">
+    <div class="model-row">
+      <span class="label">Session</span>
+      <span class="what">A workspace that keeps running whether or not a window
+      is showing it. Ours is called <code>claude</code>. Close the terminal and
+      the session carries on; open one again and you're back where you were.</span>
+    </div>
+    <div class="model-row">
+      <span class="label">Tab</span>
+      <span class="what">One per project, named <code>claude-&lt;folder&gt;</code>.
+      Each sits in its own directory with its own Claude Code instance.</span>
+    </div>
+    <div class="model-row">
+      <span class="label">Pane</span>
+      <span class="what">A split within a tab. You can ignore panes entirely —
+      this rig doesn't need them.</span>
+    </div>
+    <div class="model-row">
+      <span class="label">Attach</span>
+      <span class="what">Pointing a terminal window at a running session.
+      <em>Detaching</em> closes the window and leaves everything running.</span>
+    </div>
+  </div>
+
+  <p>Zellij is not a replacement for Windows Terminal, and you don't migrate to
+  it. Windows Terminal is the window; Zellij runs inside it. Only the Claude
+  session needs it.</p>
+
+  <div class="note stop">
+    <span class="tag">The one gotcha</span>
+    <p>A detached session keeps <em>running</em>, but the pad cannot reach it.
+    Every command silently does nothing and still reports success, so there is
+    no error to find. Minimised is fine. Unfocused is fine. Closed is not.</p>
+    <p>If the pad ever seems dead, this is the first thing to check:
+    <code>zellij --session claude action list-clients</code>. An empty list is
+    the whole diagnosis.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The four keys</h2>
+  <p class="sub">Two answer Claude; two move you between projects</p>
+
+  <div class="keys">
+    <div class="key">
+      <span class="cap">Key 1 — Yes</span>
+      <span class="does">Sends Enter, accepting whatever option is highlighted.</span>
+      <span class="chord">Ctrl+Shift+F13 · ~60 ms</span>
+    </div>
+    <div class="key">
+      <span class="cap">Key 2 — No</span>
+      <span class="does">Sends Esc, rejecting the prompt.</span>
+      <span class="chord">Ctrl+Shift+F14 · ~60 ms</span>
+    </div>
+    <div class="key">
+      <span class="cap">Key 3 — Who needs me?</span>
+      <span class="does">Jumps to the session that has been waiting longest.
+      Press again to walk to the next one.</span>
+      <span class="chord">Ctrl+Shift+F15 · ~460 ms</span>
+    </div>
+    <div class="key">
+      <span class="cap">Key 4 — Next project</span>
+      <span class="does">Cycles the Claude tabs, skipping any tab that is not a project.</span>
+      <span class="chord">Ctrl+Shift+F16 · ~460 ms</span>
+    </div>
+  </div>
+
+  <p>Key 3 is the one that earns the hardware. Cycling tabs makes you hunt;
+  key 3 makes the work raise its hand. It knows who is waiting because Claude
+  Code fires a hook on every meaningful event, and that hook drops a small file
+  naming the tab.</p>
+
+  <p><strong>Why Enter and not "y".</strong> Claude Code's permission prompt is
+  an arrow-key list, not a yes/no question — so Enter accepts the highlighted
+  choice and typing a literal <code>y</code> does nothing at all.</p>
+</section>
+
+<section>
+  <h2>What it looks like when it's working</h2>
+  <p class="sub">The status bar, read at a glance</p>
+
+  <p>Every project shows a symbol and a colour along the bottom of the Zellij
+  window. You are meant to read it peripherally and mostly not act on it:</p>
+
+  <div class="legend">
+    <div class="lg"><span class="swatch" style="color:var(--done)">v</span><span class="meaning"><strong>Finished</strong> — it has replied and is waiting for you</span></div>
+    <div class="lg"><span class="swatch" style="color:var(--needs)">!</span><span class="meaning"><strong>Needs you</strong> — a permission prompt or a question</span></div>
+    <div class="lg"><span class="swatch" style="color:var(--working)">*</span><span class="meaning"><strong>Working</strong> — thinking, or you have just sent something</span></div>
+    <div class="lg"><span class="swatch" style="color:var(--shell)">&gt;</span><span class="meaning"><strong>Running a command</strong></span></div>
+    <div class="lg"><span class="swatch" style="color:var(--reading)">~</span><span class="meaning"><strong>Reading</strong> files</span></div>
+    <div class="lg"><span class="swatch" style="color:var(--agent)">&amp;</span><span class="meaning"><strong>Subagent</strong> running</span></div>
+    <div class="lg"><span class="swatch" style="color:var(--idle)">.</span><span class="meaning"><strong>Idle</strong></span></div>
+  </div>
+
+  <p>Green and red are the two that matter — both mean the machine has stopped
+  and you are the bottleneck. That's your cue for key 3.</p>
+
+  <div class="note">
+    <span class="tag">Optional</span>
+    <p>The bar needs the zjstatus plugin. Everything else — the flags, key 3,
+    the jumping — works without it. If you'd rather not install a plugin, delete
+    the <code>default_tab_template</code> block from the layout and carry on.</p>
+  </div>
+</section>
+
+<section>
+  <h2>What you can actually do with it</h2>
+  <p class="sub">The use cases that justify the setup</p>
+
+  <div class="case">
+    <h3>Answer a prompt without stopping what you're doing</h3>
+    <p>Claude asks permission to run a command while you are reading something
+    in a browser, on a second monitor, with the terminal minimised. Press key 1.
+    Nothing flashes, nothing steals focus, no window comes forward. You carry on
+    reading.</p>
+    <p>This is the case that made the rig worth building, and it is the one
+    plain keyboard shortcuts cannot do at all.</p>
+  </div>
+
+  <div class="case">
+    <h3>Run several projects at once and be told which needs you</h3>
+    <p>Give three projects a long task each and stop supervising them. When one
+    finishes or gets stuck it raises its hand; key 3 takes you there. Press it
+    again and you're at the next one, oldest first — so nothing sits ignored
+    while you loop over the same tab.</p>
+    <p>Without this you either watch one session and waste the others, or you
+    tab around hunting for the one that stopped.</p>
+  </div>
+
+  <div class="case">
+    <h3>Start something long and genuinely walk away</h3>
+    <p>Kick off a refactor, close the laptop lid, come back later. The session
+    keeps running; reattach and the scrollback and state are intact. Zellij also
+    saves sessions to disk, so even an exited one can be resurrected with its
+    tabs and directories.</p>
+    <p>Note the honest limit: while nothing is attached, the pad can't reach it.
+    Reattach first, then the keys work again.</p>
+  </div>
+
+  <div class="case">
+    <h3>Add a project in one command, from the project</h3>
+    <p>No config to edit, no layout file to touch:</p>
+<pre><code>cd F:\some\project
+zt add .
+zt start project</code></pre>
+    <p>That registers the folder and opens a tab named after it, in the right
+    directory, with Claude running. The name matters more than it looks: the
+    hook derives the same identity from the directory Claude reports, so the
+    flag file and the tab agree without anything being configured.</p>
+    <p>Most of the time you won't even type <code>zt add</code> — a Claude
+    session started in a folder registers itself, and appears the next time you
+    run <code>zt</code>.</p>
+  </div>
+
+  <div class="case">
+    <h3>Check who's waiting without looking at the screen</h3>
+<pre><code>zt
+
+  <span class="cmt">ID                   STATE        AGE       KIND     PATH</span>
+  <span class="cmt">----------------------------------------------------------------------------</span>
+  <span class="cmt">zt                   WAITING      6m        claude   C:\code\zt</span>
+  <span class="cmt">api                  running      2h 14m    claude   C:\code\api</span>
+  <span class="cmt">web                  stopped      3d 4h     claude   C:\code\web</span></code></pre>
+    <p>Useful from any other terminal, and it tells you what's idle as well as
+    what's shouting.</p>
+  </div>
+
+  <div class="case">
+    <h3>Stop, restart, or clear out a project</h3>
+<pre><code>zt stop api        <span class="cmt"># Ctrl+C it; the tab stays as a shell</span>
+zt restart api     <span class="cmt"># and resume the same Claude conversation</span>
+zt close api       <span class="cmt"># close the tab, keep the registration</span></code></pre>
+    <p>Restart resumes rather than starting blank: the hook recorded the
+    session id, so you get the conversation back. Stop deliberately leaves a
+    prompt in the right directory rather than closing the tab — the project is
+    still there, just idle.</p>
+  </div>
+
+  <div class="case">
+    <h3>Shut the machine down without losing your place</h3>
+<pre><code>zt park            <span class="cmt"># stop everything, remember what was running</span>
+zt restore         <span class="cmt"># bring it back, resuming each conversation</span></code></pre>
+    <p>There is deliberately no shutdown hook. Catching Windows on its way down
+    gives you a few seconds and it can kill you anyway — so instead the loss is
+    made cheap. Zellij resurrects its own tabs, and each Claude session id is
+    recorded, so restoring picks the conversations back up.</p>
+    <p><code>zt park</code> is optional. If the machine goes down without
+    warning, <code>zt restore</code> still works: it falls back to the sessions
+    that never got to exit cleanly, which is exactly the set worth reopening.</p>
+  </div>
+
+  <div class="case">
+    <h3>Use the same project list on more than one PC</h3>
+    <p>Definitions live in git; where things actually are does not. A shared
+    entry says <em>root <code>code</code>, folder <code>api</code></em>, and each
+    machine says where <code>code</code> is — <code>C:\code</code> on the
+    desktop, <code>C:\dev</code> on the laptop. One config, no per-machine
+    editing, and anything the current PC can't reach simply isn't offered.</p>
+    <p>Each machine only ever writes its own device file, so two PCs registering
+    projects at the same time can't conflict.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Setting the pad up</h2>
+  <p class="sub">One command, and one thing you must do by hand every time</p>
+
+  <p>The four keys are wired through <strong>PowerToys Keyboard Manager</strong>,
+  which most Windows machines already run, so it costs no extra process:</p>
+
+<pre><code>zt pad install     <span class="cmt"># writes the four remaps</span>
+zt pad             <span class="cmt"># what is wired, and what is missing</span>
+zt pad probe       <span class="cmt"># which chords actually arrive</span></code></pre>
+
+  <p><strong>Then toggle Keyboard Manager off and on in PowerToys Settings.</strong>
+  This is not optional and it is not obvious: its engine reads the config
+  <em>when it starts</em>, never when the file changes. Until you toggle it, it
+  keeps running whatever it loaded last — which is why the keys can go on
+  working after the remaps are deleted, and why console windows can go on
+  flashing after they have been set back to hidden. <code>zt pad</code> compares
+  the engine's start time to the file and tells you when it is stale.</p>
+
+  <p>Two more things about that UI, both learned the hard way. Editing anything
+  there <strong>silently downgrades</strong> our settings — it resets the windows
+  to visible, so a console flashes on every key press; re-run
+  <code>zt pad install</code> afterwards. And the per-entry toggle it shows is
+  not stored anywhere: entries can read as switched <em>off</em> while working
+  perfectly. Ignore it.</p>
+
+  <p>If a key does nothing, <code>zt pad probe</code> points all four at a
+  logging command and tells you which ones arrive — separating "the chord never
+  reached Windows" from "it arrived and the target failed", which otherwise look
+  identical because both are silent.</p>
+</section>
+
+<section>
+  <h2>In the Command Palette</h2>
+  <p class="sub">The same rig, one keystroke away, with a dock band</p>
+
+  <p>An extension puts everything into PowerToys Command Palette — so you do not
+  need a terminal open to see what is running:</p>
+
+<pre><code>cd cmdpal
+.\pack.ps1         <span class="cmt"># build, sign, install — one command</span></code></pre>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Where</th><th>What</th></tr></thead>
+    <tbody>
+      <tr><td>root</td><td><strong>Zellij workspaces</strong>, subtitled <code>3 registered, 2 running, 1 WAITING</code></td></tr>
+      <tr><td>root</td><td>accept / reject a prompt, go to whoever's waiting, next tab, attach, sessions, park, restore</td></tr>
+      <tr><td>root</td><td>type a workspace name and it offers to jump straight there</td></tr>
+      <tr><td>dock</td><td>the workspace count, visible without summoning anything</td></tr>
+      <tr><td>per row</td><td><code>Ctrl+S</code> start · <code>Ctrl+T</code> stop · <code>Ctrl+R</code> restart · <code>Ctrl+F</code> flag · <code>Ctrl+W</code> close · <code>Ctrl+D</code> unregister</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The <strong>dock band</strong> is the piece that replaced a planned tray
+  icon. It sits in Command Palette's persistent strip and shows the count whether
+  or not you are attached — which is exactly the case the status bar inside
+  Zellij cannot cover, because it only exists while you are looking at it.
+  <code>zt dock</code> pins it.</p>
+
+  <p><strong>Why the pad still uses Keyboard Manager.</strong> Command Palette's
+  own hotkeys are genuinely system-wide — proved by binding a chord Keyboard
+  Manager knew nothing about and watching it fire. So the palette
+  <em>could</em> drive the pad. It is not used, because the palette has crashed
+  more than once while Keyboard
+  Manager has not. The pad is the part that has to work; the palette is the part
+  that makes it pleasant.</p>
+</section>
+
+<section>
+  <h2>Sessions, and the level above tabs</h2>
+  <p class="sub">Where stray things hide</p>
+
+  <p>Zellij has two levels, and conflating them wastes an afternoon.
+  <strong>Sessions</strong> are separate servers, each with its own tabs and its
+  own clients. <strong>Tabs</strong> live inside one session. Everything
+  <code>zt</code> lists is tabs inside the session called <code>claude</code>, so
+  they will never appear in <code>zellij list-sessions</code>.</p>
+
+  <p>The session level accumulates strays silently — an exited session is kept
+  so it can be resurrected, and a mistyped command creates a whole new server
+  named after a random animal. This machine quietly had two.</p>
+
+<pre><code>zt sessions                       <span class="cmt"># what exists, with tab and client counts</span>
+zt sessions kill &lt;name&gt; -Delete   <span class="cmt"># stop a stray and forget it</span></code></pre>
+
+  <p>To wipe everything and start again, in this order — <code>kill</code> alone
+  leaves them resurrectable:</p>
+
+<pre><code>zellij kill-all-sessions -y
+zellij delete-all-sessions -y
+zac</code></pre>
+
+  <p>Claude Code's transcripts are on disk, not in the terminal, so
+  <code>claude --resume</code> in a project folder picks a conversation back up
+  afterwards. The workspace registry is untouched by any of it.</p>
+</section>
+
+<section>
+  <h2>Things you might not realise are possible</h2>
+  <p class="sub">Available now, or cheaply reachable</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th>Idea</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Answer a <em>specific</em> project's prompt regardless of which tab is focused, using <code>--pane-id</code></td>
+        <td>Possible today; not wired to a key</td>
+      </tr>
+      <tr>
+        <td>Long-press a key for a second action — accept, vs accept-and-don't-ask-again</td>
+        <td>The pad's firmware supports it</td>
+      </tr>
+      <tr>
+        <td>Named keys (<code>send-keys "Ctrl c"</code>) instead of raw byte values</td>
+        <td>Confirmed available in Zellij 0.44.3</td>
+      </tr>
+      <tr>
+        <td>A Windows toast when a session needs you, for when the terminal isn't visible at all</td>
+        <td>Straightforward; make it opt-in per project</td>
+      </tr>
+      <tr>
+        <td>Taskbar progress on the terminal button as a "needs you" signal</td>
+        <td>Claude Code hooks expose the escape sequence for it</td>
+      </tr>
+      <tr>
+        <td>Drive it from a phone over SSH — approve prompts from another room</td>
+        <td>Same commands; security needs thought</td>
+      </tr>
+      <tr>
+        <td>Build the tab list from your Windows Terminal profiles</td>
+        <td>Done — <code>-FromBookmarks</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Two things are deliberately <em>not</em> possible, and are worth knowing so
+  you don't chase them: a Zellij plugin cannot listen for the pad, because plugin
+  key events only fire when the plugin's own pane is focused; and Windows'
+  <code>ControlSend</code> cannot reach Windows Terminal, because it renders
+  through DirectX and reads the focused-window keyboard path.</p>
+</section>
+
+<section>
+  <h2>The commands worth memorising</h2>
+  <p class="sub">Five, and you can look the rest up</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Command</th><th>When</th></tr></thead>
+    <tbody>
+      <tr><td><code>zt setup</code></td><td>First time on a machine — explains each layer and offers to do it</td></tr>
+<tr><td><code>zac</code></td><td>Start or return to the session — attaches, or focuses the window already on it</td></tr>
+      <tr><td><code>zt</code></td><td>What you have, what's running, who's waiting</td></tr>
+      <tr><td><code>zt add .</code></td><td>Register the folder you're standing in</td></tr>
+      <tr><td><code>zt start <em>id</em></code></td><td>Open its tab and run it — also <code>stop</code>, <code>restart</code>, <code>close</code></td></tr>
+      <tr><td><code>zt pad</code></td><td>Is the pad wired, and is its engine current</td></tr>
+      <tr><td><code>zt sessions</code></td><td>The level above tabs, where strays hide</td></tr>
+      <tr><td><code>zt check</code></td><td>Anything at all seems wrong</td></tr>
+<tr><td><code>zt uninstall</code></td><td>Remove it — <code>-WhatIf</code> shows every step first</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Inside Zellij itself, the keyboard is deliberately left alone: the config
+  starts in <em>locked</em> mode so Zellij claims no shortcuts and Claude Code
+  gets every key. Press <code>Ctrl+g</code> if you ever want Zellij's own
+  keybindings.</p>
+</section>
+
+<footer>
+  <p>Setup instructions live in <code>docs/05-usage.md</code>. The reasoning
+  behind each decision, including several attractive ideas that turned out to be
+  dead ends, is in <code>docs/00-background.md</code> and
+  <code>docs/02-decisions.md</code>.</p>
+</footer>
+
+</div>
+
+
+
+
+</body>
+</html>

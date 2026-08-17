@@ -1,0 +1,91 @@
+@{
+    RootModule        = 'ZellijTerminal.psm1'
+    ModuleVersion     = '0.7.4'
+    GUID              = 'cbeb77a8-d47e-4f13-aa58-231e6cadee15'
+    Author            = 'zt contributors'
+    CompanyName       = ''
+    Copyright         = '(c) 2026 zt contributors. MIT licence.'
+    Description       = 'zt - register, start, stop and restart the workspaces you run inside one Zellij session on Windows. Definitions live in git; per-device paths and live state do not. Claude Code sessions register themselves via the hook; arbitrary PowerShell commands work the same way.'
+
+    # 7.0, and the distinction matters.
+    #
+    # The SCRIPTS in scripts\ are deliberately 5.1-clean - no ternary, no ??, no
+    # && - because the Claude Code hook invokes them under powershell.exe and
+    # must keep doing so. Their headers say as much and it is enforced by test.
+    #
+    # This MODULE is a different contract. install.ps1 junctions it onto the
+    # pwsh 7 module path, which Windows PowerShell does not scan, so on 5.1 `zt`
+    # never autoloads no matter how compatible the body happens to be. Declaring
+    # 5.1 here described the syntax and lied about the product: it let a 5.1 user
+    # satisfy the manifest and still have nothing work, with no error naming the
+    # cause. The floor is what the thing needs to actually run.
+    PowerShellVersion = '7.0'
+
+    # Core only. There is no Desktop story - see above.
+    CompatiblePSEditions = @('Core')
+
+    # Listed by name, no wildcards: that is what lets PowerShell autoload the
+    # module the first time `zt` is typed.
+    FunctionsToExport = @(
+        'Invoke-ZellijTerminal',
+        'Get-ZellijTerminal',
+        'Select-ZellijTerminal',
+        'Register-ZellijTerminal',
+        'Unregister-ZellijTerminal',
+        'Publish-ZellijTerminal',
+        'Get-ZellijTerminalRoot',
+        'Set-ZellijTerminalRoot',
+        'Start-ZellijTerminal',
+        'Stop-ZellijTerminal',
+        'Restart-ZellijTerminal',
+        'Remove-ZellijTerminalTab',
+        'Sync-ZellijTerminal',
+        'Set-ZellijTerminalWaiting',
+        'Switch-ZellijTerminal',
+        'Connect-ZellijTerminal',
+        'Suspend-ZellijTerminal',
+        'Resume-ZellijTerminal',
+        'Edit-ZellijTerminalConfig',
+        'Test-ZellijTerminalConfig',
+        'Test-ZellijTerminalPad',
+        'Debug-ZellijTerminalPad',
+        'Install-ZellijTerminalPad',
+        'Set-ZellijTerminalPadDevice',
+        'Uninstall-ZellijTerminalPad',
+        'Test-ZellijTerminal',
+        'Get-ZellijTerminalHotkey',
+        'Get-ZellijTerminalSession',
+        'Remove-ZellijTerminalSession',
+        'Add-ZellijTerminalDock',
+        'Get-ZellijTerminalDock',
+        'Install-ZellijTerminal',
+        'Uninstall-ZellijTerminal',
+        'Export-ZellijTerminal',
+        'Import-ZellijTerminal',
+        'Start-ZellijTerminalSetup',
+        'Show-ZellijTerminalPadGuide',
+        'Show-ZellijTerminalPaletteGuide'
+    )
+    CmdletsToExport   = @()
+    VariablesToExport = @()
+    AliasesToExport   = @('zt', 'zac')
+
+    PrivateData       = @{
+        PSData = @{
+            Tags         = @('Zellij', 'ClaudeCode', 'MacroPad', 'Windows', 'Workspace', 'Productivity')
+            LicenseUri   = 'https://github.com/ztpwsh/zellij-terminal/blob/main/LICENSE'
+            ProjectUri   = 'https://github.com/ztpwsh/zellij-terminal'
+            ReleaseNotes = '0.7.4 - zellij being absent is now a result rather than an exception. Every zt command that asked zellij anything went through one function that ran the executable without checking it was there, so on a machine where zellij is not installed - or simply not on PATH yet, which is the state install.ps1 exists to fix - the answer was a raw CommandNotFoundException from somewhere deep in the module instead of anything a person could act on. Get-ZtClientCount now reports -1, Test-ZtSession reports false, and zt sessions returns nothing, which is what all three of those already meant by "could not answer". Found by CI rather than by anyone using it: a hosted runner has no zellij, and the suite had been green on every machine that had the rig installed - which is exactly the population structurally unable to notice. The regression test empties PATH rather than filtering it, so it does not depend on where zellij happens to live. 0.7.3 - zac was blind to two thirds of Windows Terminal, and the check meant to catch that could never have fired. The window check matched process name WindowsTerminal only; Preview is WindowsTerminalPreview and Canary is WindowsTerminalCanary, so on either channel zac read the machine as having no window open and opened a SECOND client on a session that already had one - mirrored, with the grid pinned to the smaller, every time, with no self-correction. It then compared the Terminal window count before and after wt focus-tab to decide whether the focus was real. Terminal hosts every window in ONE PROCESS: opening a second window leaves that count at 1 and simply moves the MainWindowHandle of the process. The count could never rise, so the comparison reported success unconditionally and the branch handling the failure was unreachable - a check that cannot fail, which is worse than no check because it reads like evidence. Demonstrated rather than reasoned about, as was the reason the old comment was wrong: wt -w <unknown> focus-tab exits 0 and does NOTHING, watched for three seconds. focus-tab does not conjure windows; new-tab does. That check is gone. In its place is a question that can be answered: a zellij client is a PROCESS, so walking up from the tab running zellij attach reaches the terminal hosting it. zac now asks whether a Windows Terminal is showing THIS session, where before it asked whether any Terminal window existed anywhere on the machine - which was true while the client was attached from a different terminal application entirely. Nothing claims to have verified a focus any more, because there is no observable for one. A second bug, found by writing the test rather than by reading the code: zellij prints Session x not found and STILL EXITS 0, and the client parse counted every line that was not the header - so three lines of prose read as three attached clients and a session that does not exist reported as attached. Rows are counted by shape now, and the count returns -1 when zellij could not answer, so no such session and nobody watching can no longer be confused for each other. The cold path stops recording its window on the wt exit code, which is 0 the moment the tab is handed off and says nothing about whether zellij attach ever ran; the marker is written only once a client has actually arrived. The window name defaults to the session name, so attaching a second session from the palette no longer raises the window belonging to the first. tests/Attach.Tests.ps1 adds 27 assertions over the client parse, the Terminal firstWindowPreference read, and the decisions zac has to keep making. Documentation that could not be followed as written: zellij/README.md gave Zellij paths missing the config level and named a claude.kdl that is not in the repo - the layout ships as a template because it carries absolute paths - and docs/05-usage.md told you to copy that same missing file, so the by-hand install path was broken for anyone not running install.ps1. The user guide advertised zt hotkeys -Install, which is exported nowhere and reachable from no dispatch route; printed a sessions example with a literal list where a session name belongs; showed a workspace table three columns out of date that listed one id twice at one path, which the registry cannot hold; and began at <title> with no doctype and no charset while carrying 48 non-ASCII characters. Four published files justified the no-Ctrl+Alt rule by citing a development notes file that is never published, so the pointer was unfollowable by construction; they now cite D21 in docs/02-decisions.md, which states the same rule in public. The reference check that missed them was wrong three ways - the pattern could not see a bare filename, the question it asked was does this exist here rather than will the reader have it, and an extension allow-list hid the .ahk and .cs sites - and after fixing it was run against the previous commit to prove it reports all four. docs/00-background.md now records the mirroring behaviour itself rather than leaving it in a troubleshooting entry, including the consequence that appeared in no document at all: each client carries its OWN focus, so an injected keystroke can land in a pane you are not looking at. 0.7.2 - the tab says what its session is doing. A Claude tab is now named claude-web-api ~ while it reads, # while it writes, v when it has finished and wants you - the same table that colours the status bar, which could only ever say WHICH project was busy and never point at a tab. This was supposed to be impossible: rename-tab renames the FOCUSED tab, so a background hook calling it would rename whatever you were looking at. It turns out to take -t <id>, which targets a tab and leaves focus alone; docs/00-background.md had recorded the opposite as confirmed, and now records the retest. Colour cannot come along - zjstatus substitutes a tab name as plain text, so markup in it prints literally. The consequence to know about if you script against this rig: a tab s live name is no longer its identity. Strip the glyph before comparing and resolve back to the live name before go-to-tab-name, which matches exactly and no-ops silently on a miss. A session working in a SUBFOLDER of its project is now labelled by the project rather than by the folder: it used to invent a tab name that existed nowhere, which meant the one session actually asking for attention was the one key 3 refused to jump to. zac stops opening a second window on a session something is already viewing - Zellij mirrors, so that is one session with two clients, the same pane in both, your keystrokes in both, and the grid pinned to the SMALLEST client, which presents as a window that will not resize and text that will not reflow. The Windows Terminal tab is titled zellij-terminal and carries Zellij s icon, via a profile contributed as a Terminal FRAGMENT so your own settings.json is never edited; the icon is extracted from your installed zellij.exe rather than shipped here, and both are removed on uninstall. Terminal reads fragments at startup, so restart it once. zt check gained three lines: more than one client attached, Terminal firstWindowPreference (persistedWindowLayout restores a window already running zellij attach and then honours your command line on top of it, which is where the duplicate window came from), and it no longer counts any client as healthy. 0.7.1 - zac no longer opens a second window on a session something is already viewing. Zellij mirrors, so a second client is not a second session: it shows the same pane, takes your keystrokes in both, and sizes the grid to the SMALLEST client attached - which presents as a window that will not resize and text that will not reflow, and sends you looking at the terminal emulator rather than at the client list. It now tries the named window handle first and reads the Terminal window count to find out whether that focused a window or created one, because wt exits 0 either way. The Windows Terminal TAB is titled zellij-terminal rather than the session name; the session name was already on the zellij tab bar directly below it. zt check gained two lines: one when more than one client is attached, naming the resize symptom, and one for Terminal firstWindowPreference, because persistedWindowLayout restores a window that is already running zellij attach and then honours the command line on top of it - a cold attach opens two windows and nothing inside this rig can see why. 0.7.0 - the Command Palette extension had drifted eight verbs behind the module; it can now reach sync, publish, config (device and shared), validate, roots, define a root, export and import, plus previous tab. The rarer ones sit on a "registry and config" page rather than adding eight entries to a palette root shared with every other extension. Every palette action now logs its command and exit code to %LOCALAPPDATA%\ZellijTerminal\palette.log - the action path previously created no window and ended in an empty catch, so two verbs were completely dead for a day behind a toast that looked like success. Commands that block on Read-Host now get a console window automatically, decided in the constructor rather than per call site: "check the rig" had promised output "in a window" while running with CreateNoWindow, so it rendered where nobody could see and hung on its own prompt. 0.6.0 - the per-device registry moved OUT of the clone to %LOCALAPPDATA%\ZellijTerminal\devices\<HOST>.json. It is state this machine writes rather than source that ships, and in a working tree it died to git clean -xfd, to a re-clone, or to the directory being rebuilt underneath it. Nothing migrates automatically: copy your old config\devices\<HOST>.json to the new path, or set $env:ZT_CONFIG_HOME to the old directory to keep the previous layout - that variable relocates BOTH config files together and is how several PCs share one list through a private repo. config\workspaces.json is unchanged, because it is committed content that ships with the clone. zt check now prints which registry file it read, not just how many workspaces are in it. 0.5.0 - zt setup, a guided walkthrough that explains each layer before offering to do it and can install Zellij with winget; zt pad explain and zt palette, so the two optional pieces explain themselves rather than looking like broken required ones; the hook records its own failures to a log that zt check reports, closing the one place this rig could still fail silently; install.ps1 -Global registers the hook for every project rather than one repo, merged into existing settings; install.ps1 gates on PowerShell 7 and offers to install Zellij; zt add says which kind it registered and what will run, and -Kind pwsh no longer requires a command; Claude session display names drop the claude- tab prefix; a Pester suite and CI. 0.4.0 - zt pick and tab completion after zt; park/restore, so a shutdown is recovered from rather than caught; config/validate for hand-editing the JSON; an AGE column so a forgotten session is visible. 0.3.0 - renamed from ClaudeZellij to ZellijTerminal (zt). Adds a workspace registry split across a shared config in git and a per-device config only that device writes, live state under LOCALAPPDATA, start/stop/restart/close, tab-name collision detection, argument completion, and a zt dispatcher. 0.2.0 - Connect (zac). 0.1.0 - first cut wrapping the scripts.'
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+

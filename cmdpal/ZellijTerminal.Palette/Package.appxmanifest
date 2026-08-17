@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Structure copied from Microsoft.CmdPalGitHubExtension's shipped manifest,
+  which is installed on this machine and is the only authoritative example of
+  the extension side of the contract. Two blocks matter and both must agree on
+  the SAME class GUID as the [Guid] attribute on ZtExtension in Program.cs:
+
+    com:Extension  windows.comServer   - how the process is launched
+    uap3:Extension windows.appExtension - how Command Palette discovers it,
+                                          via Name="com.microsoft.commandpalette"
+
+  Get either wrong, or let the GUIDs drift apart, and the extension simply does
+  not appear. There is no error and nothing is logged - the same silent-failure
+  shape as the rest of this rig.
+
+  Publisher must match the signing certificate's subject exactly, or
+  Add-AppxPackage refuses the package.
+
+  No PackageDependency on WindowsAppRuntime: the GitHub extension needs it for
+  WinUI, this one has no UI of its own.
+-->
+
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 com rescap">
+
+  <Identity
+    Name="ZellijTerminal.Palette"
+    Publisher="CN=ZellijTerminal"
+    Version="0.1.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Zellij Terminal</DisplayName>
+    <PublisherDisplayName>ZellijTerminal</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="ZellijTerminalCmdPal"
+                 Executable="ZellijTerminal.Palette.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+
+      <!-- AppListEntry="none": this is an extension, not something to launch
+           from Start. -->
+      <uap:VisualElements
+        DisplayName="Zellij Terminal"
+        Description="Control Zellij workspaces from the Command Palette"
+        BackgroundColor="transparent"
+        AppListEntry="none"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="ZellijTerminal.Palette.exe"
+                           Arguments="-RegisterProcessAsComServer"
+                           DisplayName="Zellij Terminal for Command Palette">
+              <com:Class Id="6f0d5b1a-0f6a-4a4c-9d3e-2b7c8a1e5f40"
+                         DisplayName="Zellij Terminal for Command Palette" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.commandpalette"
+                             Id="ZellijTerminal"
+                             PublicFolder="Public"
+                             DisplayName="Zellij Terminal"
+                             Description="Control Zellij workspaces from the Command Palette">
+            <uap3:Properties>
+              <CmdPalProvider>
+                <Activation>
+                  <CreateInstance ClassId="6f0d5b1a-0f6a-4a4c-9d3e-2b7c8a1e5f40" />
+                </Activation>
+                <SupportedInterfaces>
+                  <Commands />
+                </SupportedInterfaces>
+              </CmdPalProvider>
+            </uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
+

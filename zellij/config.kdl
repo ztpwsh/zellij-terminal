@@ -1,0 +1,39 @@
+// Zellij config -> %APPDATA%\Zellij\config\config.kdl
+// Note the `config` level. Verified on 0.44.3 via `zellij setup --check`,
+// which prints [CONFIG DIR] and [LAYOUT DIR] explicitly.
+
+// CRITICAL. Zellij normally claims a pile of Ctrl shortcuts, which fight
+// Claude Code for the same keys. Locked mode passes everything straight
+// through to the running application. Ctrl+g unlocks if you want Zellij's
+// own keybindings interactively.
+//
+// Nothing is lost by locking: the macro pad drives tab navigation over the
+// CLI, so Zellij's keybindings are never needed in normal use.
+default_mode "locked"
+
+// Start with the Claude layout. Lets the Windows Terminal profile stay as the
+// plain `zellij.exe attach --create claude`.
+default_layout "claude"
+
+// Historic issue, NOT reproduced on 0.44.3 (retested 2026-08-14): setting
+// this to pwsh.exe was reported to break per-tab cwd.
+//   https://github.com/zellij-org/zellij/issues/4938
+//   https://github.com/zellij-org/zellij/issues/5052
+// Tested on 0.44.3 with cmd.exe, powershell.exe and pwsh.exe: all launch, and
+// per-tab cwd works in every case. Left here so the symptom is recognisable if
+// it regresses - if tabs open in the wrong directory, comment this out first.
+//
+// With nothing set you get cmd.exe, not PowerShell. There is no $SHELL on
+// Windows, so if you want PowerShell you have to say so.
+//
+// "pwsh.exe" resolves via the WindowsApps app-execution-alias when PowerShell 7
+// is the Store build. That works. Prefer it over the full versioned path, which
+// contains a version number and breaks on the next pwsh update.
+default_shell "pwsh.exe"
+
+// Frames waste rows and add noise when most tabs are a single pane.
+pane_frames false
+
+// Session serialisation: an exited session stays in `zellij list-sessions`
+// and resurrects with its tabs, names and directories.
+session_serialization true

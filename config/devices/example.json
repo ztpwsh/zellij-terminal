@@ -1,0 +1,21 @@
+{
+  "//": "Copy this to <YOUR-COMPUTERNAME>.json, or just run `zt add .` and let the module create it. Only the machine it is named after ever writes it, which is what lets several PCs share one repo without conflicting.",
+  "version": 1,
+  "device": "EXAMPLE-PC",
+  "roots": {
+    "code": "C:\\code"
+  },
+  "workspaces": [
+    {
+      "id": "example",
+      "key": "00000000",
+      "kind": "claude",
+      "command": "",
+      "name": "",
+      "root": "code",
+      "rel": "example",
+      "abs": null,
+      "tags": []
+    }
+  ]
+}

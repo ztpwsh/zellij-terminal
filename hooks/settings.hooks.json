@@ -1,0 +1,170 @@
+{
+  "_comment": [
+    "Full set of nine events. MEASURED COST (2026-08-14): each hook",
+    "invocation is a PowerShell process spawn costing ~478 ms under",
+    "powershell.exe and ~600 ms under pwsh. PreToolUse and PostToolUse fire on",
+    "every single tool call, so registering both adds ~956 ms per tool call -",
+    "roughly 19 s on a twenty-tool turn. Delete those two blocks unless you",
+    "specifically want per-tool colour detail. The other seven fire a handful",
+    "of times per turn and cost about 1 s per turn regardless of workload.",
+    "C:/code/zt/.claude/settings.json holds the trimmed seven-event set.",
+    "Registering project-scoped and pointing at the repo copy of the script",
+    "avoids staging it in C:/tools and makes edits take effect immediately."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:/tools/claude-zj-hook.ps1"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+

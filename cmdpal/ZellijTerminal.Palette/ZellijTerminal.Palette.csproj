@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Pinned to 0.11.x to match Microsoft.CommandPalette 0.11.11762.0 as installed.
+    The extension API is young and has moved between releases; a version skew
+    here shows up as the extension simply not appearing, with no error.
+
+    The toolkit ships inside the Extensions package
+    (lib\net8.0-windows10.0.19041.0\...Toolkit.dll) - there is no separate
+    Toolkit package on NuGet, which is worth knowing before hunting for one.
+  -->
+
+  <PropertyGroup>
+    <!--
+      The TargetFramework's platform version must match a Windows SDK actually
+      installed, not the minimum you want to support: cswinrt reads
+      Windows Kits\10\Platforms\UAP\<version>\Platform.xml and fails with
+      "Could not read the Windows SDK's Platform.xml" if it is absent. Only
+      10.0.26100.0 is installed here. MinVersion is what sets the floor.
+    -->
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <OutputType>WinExe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ZellijTerminal.Palette</RootNamespace>
+    <AssemblyName>ZellijTerminal.Palette</AssemblyName>
+    <Platforms>x64;arm64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>false</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CommandPalette.Extensions" Version="0.11.260520004" />
+  </ItemGroup>
+
+</Project>
+
+

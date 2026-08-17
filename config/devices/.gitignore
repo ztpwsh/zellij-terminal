@@ -1,0 +1,15 @@
+# The device registry does not live here any more. `zt` writes it to
+# %LOCALAPPDATA%\ZellijTerminal\devices\<HOST>.json, because it is state this
+# machine generates rather than source that ships with the clone - and state in
+# a working tree dies to `git clean -xfd`, to a re-clone, or to the directory
+# being rebuilt underneath it.
+#
+# This directory stays for example.json, which documents the shape, and for the
+# case where $env:ZT_CONFIG_HOME points back at <clone>\config so several PCs
+# can share one workspace list through a PRIVATE repo. Do that and the files
+# land here again, which is why the rule below still matters: in a public repo
+# they would publish your machine names and drive layout.
+#
+# Sharing them privately across machines? Delete this file and commit yours.
+*.json
+!example.json

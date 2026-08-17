@@ -1,0 +1,190 @@
+// Zellij layout - the STARTING tabs for the Claude session.
+//
+// SAVE AS:  %APPDATA%\Zellij\config\layouts\claude.kdl
+//           Note the `config` level - verified against 0.44.3 with
+//           `zellij setup --check`, which reports [LAYOUT DIR] explicitly.
+//
+// USE IT:   add this line to %APPDATA%\Zellij\config\config.kdl
+//               default_layout "claude"
+//           then your Windows Terminal profile command works unchanged:
+//               zellij.exe attach --create claude
+//
+// DO NOT USE:  zellij --session claude --layout claude
+//           This looks right and is not. Per `zellij --help`, --layout
+//           combined with --session means "add these tabs to the EXISTING
+//           session", so on a session that doesn't exist yet it fails with
+//           "Session 'claude' not found" and starts nothing. Confirmed on
+//           0.44.3. default_layout plus `attach --create` is the only form
+//           that gives a named session AND a layout.
+//
+// THIS FILE IS DELIBERATELY SHORT
+//   Projects are added and removed at runtime with
+//       scripts\zj-claude-project.ps1 -Add .        (from the project folder)
+//       scripts\zj-claude-project.ps1 -Remove foo
+//       scripts\zj-claude-project.ps1 -List
+//   so there is no need to edit this file every time you start or finish a
+//   project. Keep here only the tabs you always want on startup.
+//
+// WHY THE NAMES MATTER
+//   Every project tab is named claude-* so zj-claude-tab.ps1 can cycle
+//   between just those and skip anything that is not a project. The prefix must agree with
+//   the -Pattern argument there and the -Prefix in claude-zj-hook.ps1.
+//
+// WINDOWS PATHS
+//   Use forward slashes. Backslashes need escaping in KDL and are a common
+//   source of silent failures.
+//
+// KDL SYNTAX
+//   An inline node needs a terminating semicolon: `{ pane; }`. The multi-line
+//   form used below does not. `{ pane }` is a parse error - and when the
+//   layout is loaded via --session the error is swallowed and reported as
+//   "Session not found", which sends you hunting in the wrong place.
+//   To parse-check a layout:  zellij -l <name>   (no -s; exit 0 means OK)
+//
+// THESE DIRECTORIES MUST EXIST
+//   A tab whose cwd is missing does NOT error - Zellij falls back silently and
+//   you get a tab in the wrong directory.
+
+layout {
+
+    // ---- Status bar --------------------------------------------------------
+    // zjstatus renders the coloured per-project activity the hook pipes to it.
+    // Install: download zjstatus.wasm from github.com/dj95/zjstatus/releases
+    // into %APPDATA%\Zellij\data\plugins\ . Verified with v0.24.0.
+    //
+    // Delete this whole default_tab_template block if you don't want it - the
+    // flag files and key 3 work fine without a status bar.
+    //
+    // `pipe_status_rendermode "dynamic"` is the load-bearing line: it tells
+    // zjstatus to INTERPRET the #[fg=...] markup rather than print it. The
+    // default "static" gives grey text with visible escape codes, which is the
+    // failure everyone hits first.
+    //
+    // The widget name must agree in three places: the {pipe_status} reference,
+    // the pipe_status_format key, and the hook's message prefix
+    // `zjstatus::pipe::pipe_status::`.
+    default_tab_template {
+        // The bar goes FIRST so it sits at the TOP, where a tab bar is
+        // expected. It also keeps initial focus on the terminal below it:
+        // with the bar last, focus could land on the plugin pane, which has
+        // no input - you get a status line and nothing to type into, which
+        // looks exactly like a broken session.
+        //
+        // If focus ever does land on the bar, Ctrl+g then Ctrl+p moves it.
+        pane size=1 borderless=true {
+            plugin location="file:{{PLUGINS}}/zjstatus.wasm" {
+                format_left  "{mode}{tabs}"
+                format_right "{pipe_status} "
+                format_space "#[bg=#181825]"
+
+                pipe_status_format     "{output}"
+                pipe_status_rendermode "dynamic"
+
+                // Tabs are filled blocks, not coloured text. A custom
+                // default_tab_template REPLACES Zellij's built-in tab bar, so
+                // this line is the only place tab names appear - it has to be
+                // unmissable rather than tasteful.
+                tab_normal   "#[fg=#A6ADC8,bg=#313244] {index} {name} "
+                tab_active   "#[fg=#1E1E2E,bg=#F9E2AF,bold] {index} {name} "
+                tab_separator "#[bg=#181825] "
+
+                // Locked is the normal state here (see D5), so it should look
+                // calm rather than like a warning.
+                mode_locked        "#[fg=#6C7086,bg=#181825] LOCKED "
+                mode_normal        "#[fg=#A6E3A1,bg=#181825] NORMAL "
+                mode_tab           "#[fg=#89B4FA,bg=#181825] TAB "
+                mode_pane          "#[fg=#89B4FA,bg=#181825] PANE "
+                mode_default_to_mode "locked"
+            }
+        }
+
+        // The tab's own panes. Must come AFTER the bar pane above, or the bar
+        // renders at the bottom instead of the top.
+        children
+    }
+
+    // ---- Claude Code projects ---------------------------------------------
+    // Plain shells, not `pane command="claude"`. Starting N Claude sessions
+    // the moment the terminal opens is rarely what you want; type `claude` in
+    // whichever tab you actually need. Swap in the commented form below if you
+    // prefer it.
+    // WHY EVERY PANE SPELLS OUT pwsh AND A PRELUDE
+    //   TERM and COLORTERM are BOTH EMPTY in a Zellij pane on Windows -
+    //   verified with a probe pane. Claude Code and most TUIs read them to
+    //   decide whether colour is supported, so without this the whole pane
+    //   renders black and white while looking fine in a bare terminal.
+    //
+    //   Panes also inherit the environment of the zellij SERVER. If that server
+    //   was ever started from inside a Claude Code session, every pane inherits
+    //   CLAUDE_CODE_CHILD_SESSION and Claude reports "Transcript saving is
+    //   off". Clearing it makes each tab a proper top-level session.
+    //
+    //   NO_COLOR arrives the same way and is worse, because it is honoured
+    //   BEFORE TERM and COLORTERM are consulted - so the two assignments above
+    //   are silently pointless and every pane renders black and white. Claude
+    //   Code sets NO_COLOR=1 for the commands it runs, so anyone who installs
+    //   this rig by asking Claude to gets a colourless session and no clue why.
+    //   Clearing it in the pane confines a deliberate global NO_COLOR to
+    //   outside these tabs, which is the right way round for a rig about TUIs.
+    //
+    //   -NoExit keeps the tab alive as a prompt if you start and then quit
+    //   Claude, instead of the pane disappearing.
+
+    // ---- The only startup tab ----------------------------------------------
+    // A Zellij session must have at least one tab, so "start with none" means
+    // "start with one that is not a project". Project tabs are added at runtime
+    // by `zt start`, so hardcoding any here only produces duplicates of what the
+    // registry already knows - which is exactly what happened the first time
+    // this rig was installed: the layout opened a tab on the repo, `zt add .`
+    // registered the same folder, and you got two tabs on one directory.
+    //
+    // It runs `zt`, because on a cold start the only question you have is what
+    // have I got. Fresh install, that prints the "nothing registered yet, try
+    // zt add ." hint; afterwards it is the workspace table with states. Either
+    // way the answer is the real one rather than a welcome message that has to
+    // be kept true by hand.
+    //
+    // cwd is the repo, not $HOME: this is the rig's own tab, so it is where you
+    // would `git pull` to update, re-run install.ps1, or edit config.
+    //
+    // NOT named claude-*, so the pad's next/prev keys walk past it exactly as
+    // they walked past the old `scratch` tab, which this replaces. Two things
+    // assume a claude-* tab exists and were adjusted to tolerate none:
+    // Test-Setup.ps1 (was a FAIL) and zj-claude-tab.ps1 (was a Write-Error).
+    tab name="home" cwd="{{REPO}}" {
+        pane command="pwsh" {
+            args "-NoLogo" "-NoExit" "-Command" "$env:TERM='xterm-256color'; $env:COLORTERM='truecolor'; Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue; Remove-Item Env:CLAUDE_CODE_CHILD_SESSION -ErrorAction SilentlyContinue; zt"
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VARIATIONS
+// ---------------------------------------------------------------------------
+//
+// Auto-start Claude Code in a tab:
+//
+//   tab name="claude-api" cwd="C:/code/api" {
+//       pane command="claude"
+//   }
+//
+// Split a tab, with each pane in a different directory:
+//
+//   tab name="claude-api" cwd="C:/code/api" {
+//       pane command="claude"
+//       pane cwd="tests"          // relative paths resolve against the tab cwd
+//   }
+//
+// Set a base directory once and make every tab relative to it:
+//
+//   layout {
+//       cwd "F:/claude"
+//       tab name="claude-api" cwd="api"   { pane; }
+//       tab name="claude-web" cwd="web"   { pane; }
+//   }
+//
+// Precedence, most specific first:
+//     pane cwd  ->  tab cwd  ->  layout cwd  ->  directory you launched from
+// ---------------------------------------------------------------------------
+
+
