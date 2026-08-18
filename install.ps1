@@ -966,19 +966,63 @@ if ((-not $SkipLiveProbe) -and (-not $SkipZellijConfig)) {
                 Test-ZtClaim 'a session starts from this config' $false (
                     'the probe session never appeared. ' + ($probeErr -replace '\s+', ' '))
             } else {
-                $liveLayout = & zellij --session $probeName action dump-layout 2>&1 | Out-String
-                if (-not $liveLayout) { $liveLayout = '' }
-
                 # Compare the LIVE session against the path the DEPLOYED layout
-                # names. Anything else compares the file with itself.
+                # names. Anything else compares the file with itself. Computed
+                # BEFORE the wait below, because the wait needs to know what it
+                # is waiting for.
                 $wantPlugin = ''
                 if ($layDst2 -and (Test-Path -LiteralPath $layDst2)) {
                     $wantMatch = [regex]::Match((Get-Content -LiteralPath $layDst2 -Raw), 'location="file:([^"]+)"')
                     if ($wantMatch.Success) { $wantPlugin = $wantMatch.Groups[1].Value }
                 }
+                $wantFs = $wantPlugin -replace '/', '\'
+                $expectPane = [bool]($wantPlugin -and (Test-Path -LiteralPath $wantFs))
+
+                # WAIT FOR THE CLAIM, NOT FOR THE PROCESS.
+                #
+                # The loop above waits for the session to be LISTED, which means
+                # the Zellij SERVER is up. It does not mean the session has been
+                # built: the client is what hands the layout over, and the tabs
+                # and the plugin pane appear some time after the name does. This
+                # used to dump the layout once, immediately, and judge all three
+                # claims off that single sample - so any machine slower than the
+                # gap between those two events failed every one of them and got
+                # told its install was broken.
+                #
+                # Measured on the machine this was written on: listed at 233 ms,
+                # tabs and plugin pane present at 236 ms. Three milliseconds is
+                # why it was never seen here, and a report from a second machine
+                # is what it took to see it at all. A margin that small is not a
+                # margin, it is a coin toss with a bias.
+                #
+                # So poll until the claims are true, and fail only when they are
+                # still false after a timeout worth waiting for. The elapsed
+                # time is reported either way: a machine that needed four
+                # seconds is working, and is also worth knowing about.
+                $probeWait = [System.Diagnostics.Stopwatch]::StartNew()
+                $liveLayout = ''
+                while ($probeWait.ElapsedMilliseconds -lt 15000) {
+                    $liveLayout = & zellij --session $probeName action dump-layout 2>&1 | Out-String
+                    if (-not $liveLayout) { $liveLayout = '' }
+                    $gotTabs = $liveLayout -match 'tab name='
+                    $gotPane = (-not $expectPane) -or ($liveLayout -match [regex]::Escape($wantPlugin))
+                    if ($gotTabs -and $gotPane) { break }
+                    Start-Sleep -Milliseconds 250
+                }
+                $probeWait.Stop()
+                $probeMs = $probeWait.ElapsedMilliseconds
+
+                # What the session actually said, for the failure messages. A
+                # dump that is an ERROR rather than a layout is the case worth
+                # separating: `2>&1` above means a Zellij error lands in this
+                # same string, and "no tabs" is a poor description of "session
+                # not found".
+                $dumpHead = ($liveLayout -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+                if (-not $dumpHead) { $dumpHead = '(nothing at all)' }
 
                 Test-ZtClaim 'a session starts from this config' ($liveLayout -match 'tab name=') (
-                    'the session came up but reported no tabs')
+                    "the session came up but still reported no tabs after ${probeMs} ms. " +
+                    "dump-layout said: $dumpHead")
 
                 # ONLY WHEN THE PLUGIN IS ACTUALLY THERE. A layout naming a wasm
                 # that does not exist produces a session with NO PLUGIN PANE AT
@@ -991,11 +1035,11 @@ if ((-not $SkipLiveProbe) -and (-not $SkipZellijConfig)) {
                 #
                 # It also means the absence of the pane is a real signal once
                 # the wasm IS present, which is the case worth failing on.
-                $wantFs = $wantPlugin -replace '/', '\'
-                if ($wantPlugin -and (Test-Path -LiteralPath $wantFs)) {
+                if ($expectPane) {
                     Test-ZtClaim 'the session carries the status bar' (
                         $liveLayout -match [regex]::Escape($wantPlugin)) (
-                        "the live session does not contain a plugin pane for $wantPlugin")
+                        "the live session still contained no plugin pane for $wantPlugin " +
+                        "after ${probeMs} ms")
                 } elseif ($wantPlugin) {
                     Write-Note 'status bar pane not checked - the plugin is not downloaded yet'
                 }
@@ -1011,10 +1055,32 @@ if ((-not $SkipLiveProbe) -and (-not $SkipZellijConfig)) {
                 $probeProc.WaitForExit(3000) | Out-Null
             }
             & zellij delete-session $probeName --force 2>&1 | Out-Null
-            $stillThere = @(& zellij list-sessions --no-formatting --short 2>$null) -contains $probeName
+
+            # SAME MISTAKE AS ABOVE, IN THE OTHER DIRECTION. This asked once,
+            # immediately, whether the session had gone - and the server takes a
+            # moment to shut down and stop listing it. Measured here: 105 ms.
+            # A single sample at zero turns a clean removal into a reported leak
+            # on any machine that is not instant, and the message then tells you
+            # to delete a session that deleted itself a fifth of a second later.
+            $stillThere = $true
+            for ($i = 0; $i -lt 30; $i++) {
+                $stillThere = @(& zellij list-sessions --no-formatting --short 2>$null) -contains $probeName
+                if (-not $stillThere) { break }
+                Start-Sleep -Milliseconds 250
+            }
             Test-ZtClaim 'the probe session was removed' (-not $stillThere) (
                 "$probeName is still listed - remove it with: zellij delete-session $probeName --force")
-            Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+
+            # KEEP THE EVIDENCE WHEN IT FAILED. This deleted the probe directory
+            # unconditionally, which threw away Zellij's own stderr - the one
+            # thing that would say WHY - before anybody could read it. An
+            # installer that reports a failure and destroys its cause is asking
+            # to be diagnosed by guesswork, and was.
+            if ($verified) {
+                Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Note "probe output kept for diagnosis: $probeDir"
+            }
         }
 
         # THE GRANT MUST SURVIVE A ZELLIJ ROUND TRIP. The server holds
