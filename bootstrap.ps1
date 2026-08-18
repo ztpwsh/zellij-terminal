@@ -67,6 +67,27 @@ if (-not (Get-Command zellij -ErrorAction SilentlyContinue)) {
     Write-Host '  The installer will offer to fetch it with winget.' -ForegroundColor DarkGray
 }
 
+# The upgrade path nobody designed for, and the one everybody takes: you are
+# working in the session, you read that a new version is out, you paste the
+# one-liner into the pane in front of you. It works - nesting is not blocked -
+# but the zjstatus permission grant cannot be written while a Zellij server is
+# running, and the server it means is the one you are typing in. So the upgrade
+# completes and the machine still has no status bar.
+#
+# Said HERE as well as in install.ps1, before anything is cloned, because this
+# is the earliest point at which opening a different window is still free.
+# Report only: refusing would be worse than the warning, and this script has no
+# business deciding that for you.
+if ($env:ZELLIJ) {
+    $zjName = $env:ZELLIJ_SESSION_NAME
+    if (-not $zjName) { $zjName = '(unknown)' }
+    Write-Host ''
+    Write-Host "  You are inside Zellij session '$zjName'." -ForegroundColor Yellow
+    Write-Host '  The install will run, but the zjstatus permission grant cannot be' -ForegroundColor Yellow
+    Write-Host '  written while a session is up - and that includes this one. Running' -ForegroundColor Yellow
+    Write-Host '  this from an ordinary PowerShell window avoids the extra steps.' -ForegroundColor Yellow
+}
+
 Write-Host ''
 Write-Host '  zellij-terminal' -ForegroundColor Cyan
 Write-Host ''
@@ -140,7 +161,18 @@ if (Test-Path -LiteralPath $dest) {
 # install was the visible symptom". This was the link that still did not read
 # it - the two git calls above are both checked, and the one step that can
 # half-succeed was not.
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -eq 2) {
+    # 2 is "installed, one step deferred" - see install.ps1's closing banner.
+    # It is deliberately not 1: on every machine upgrading from 0.7.9 or earlier
+    # while it is in use, the permission grant defers, and throwing here told
+    # those users their install had FAILED. It had not; one step needed them to
+    # close their sessions first, and the sequence for doing that without losing
+    # anything was printed by the installer a few lines up. Reporting a working
+    # machine as broken invites the one response that cannot help - running the
+    # installer again with the server still up.
+    Write-Host ''
+    Write-Host '  Installed, with a step deferred - the sequence to finish it is above.' -ForegroundColor Yellow
+} elseif ($LASTEXITCODE -ne 0) {
     throw ("install.ps1 failed ($LASTEXITCODE) - the problems are printed above. " +
            "The clone at $dest is intact; fix what it named and re-run install.ps1 there.")
 }

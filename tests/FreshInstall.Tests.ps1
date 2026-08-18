@@ -74,7 +74,15 @@ BeforeAll {
     }
 
     function Invoke-ZtColdInstall {
-        param($Profile_)
+        param(
+            $Profile_,
+
+            # Extra environment for the child, as name = value. Used to put the
+            # installer inside a Zellij session without there being one: ZELLIJ
+            # is exactly how Zellij itself tells a child shell that, so setting
+            # it is not a stub, it is the same signal from the same variable.
+            [hashtable]$WithEnv = @{}
+        )
 
         # -SkipServerCheck because a zellij server on the machine running the
         # suite has nothing to do with this redirected profile, and without it
@@ -83,9 +91,13 @@ BeforeAll {
         # is not redirectable and is not what this file is about.
         $runner = Join-Path $Profile_.Root 'run.ps1'
         $log    = Join-Path $Profile_.Root 'install.log'
+        $extra  = (@($WithEnv.Keys | Sort-Object | ForEach-Object {
+            "`$env:$_ = '$($WithEnv[$_])'"
+        }) -join [Environment]::NewLine)
         Set-Content -LiteralPath $runner -Encoding UTF8 -Value @"
 `$env:APPDATA      = '$($Profile_.AppData)'
 `$env:LOCALAPPDATA = '$($Profile_.LocalAppData)'
+$extra
 & '$(Join-Path $script:RepoRoot 'install.ps1')' ``
     -ModulePath '$(Join-Path $Profile_.Root 'Modules')' ``
     -SkipHook -SkipZellijCheck -SkipServerCheck -SkipLiveProbe -Force *> '$log'
@@ -168,5 +180,75 @@ Describe 'A cold install' {
         # note rather than either silence or a failure.
         $script:Result.Log | Should -Match 'is not there yet'
         $script:Result.ExitCode | Should -Be 0 -Because 'a missing optional plugin is not a failed install'
+    }
+}
+
+Describe 'The same install, run from inside Zellij' {
+    <#
+        THE UPGRADE PATH NOBODY DESIGNED FOR, AND THE ONE EVERYBODY TAKES.
+
+        You are working in the session. You read that a new version exists. You
+        paste the one-liner into the pane in front of you. Nesting is not
+        blocked - `zellij -s <name>` with ZELLIJ set starts a real session that
+        renders its own bar, tested - so the install runs and reports success,
+        and three things go wrong that go wrong only here:
+
+          * a Zellij server is running BY DEFINITION, so the permission grant
+            defers, every time;
+          * the module junction is replaced under a shell that has already
+            imported ZellijTerminal, so zt in that window stays the old copy;
+          * the printed way out of the first point - delete every session -
+            includes the one it is being read in.
+
+        Nothing checked $env:ZELLIJ anywhere in the repo before 0.7.15, which is
+        why all three were found by having them happen rather than by reading.
+
+        REPORT, NOT REFUSE. Blocking would break the obvious upgrade path in
+        order to protect against a warning, so this asserts on what is SAID and
+        on the run still completing. If a later change makes it refuse, the
+        exit-code assertion below goes red, which is the intent.
+
+        ZELLIJ is set rather than simulated: it is the variable Zellij itself
+        exports into every shell it starts, so this is the same signal from the
+        same source, without needing a session to be open on the test machine.
+    #>
+
+    BeforeAll {
+        $script:Inside = New-ZtColdProfile
+        $script:InsideResult = Invoke-ZtColdInstall $script:Inside -WithEnv @{
+            ZELLIJ              = '0'
+            ZELLIJ_SESSION_NAME = 'claude'
+        }
+    }
+
+    It 'says so, and names the session it found' {
+        $script:InsideResult.Log | Should -Match 'inside Zellij'
+        $script:InsideResult.Log | Should -Match "session 'claude'" -Because (
+            'ZELLIJ_SESSION_NAME is the only thing that says WHICH session this is')
+    }
+
+    It 'names all three consequences that bite only here' {
+        $log = $script:InsideResult.Log
+        $log | Should -Match 'grant cannot be written'
+        $log | Should -Match 'junction'
+        $log | Should -Match 'includes this one' -Because (
+            'otherwise "delete every session" is an instruction to close this window, unlabelled')
+    }
+
+    It 'reports and carries on rather than refusing' {
+        # Nesting works. An installer that refused here would be protecting the
+        # user from a message.
+        $script:InsideResult.ExitCode | Should -Be 0 -Because $script:InsideResult.Log
+        $script:Inside.Layout | Should -Exist
+    }
+
+    It 'and bootstrap.ps1 says it too, before anything is cloned' {
+        # The one-liner is the route that actually reaches this case, and it
+        # chooses where to put a clone before install.ps1 gets a say. The
+        # earliest moment at which opening a different window is still free is
+        # in bootstrap.ps1, not in the installer it hands off to.
+        $boot = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'bootstrap.ps1') -Raw
+        $boot | Should -Match '\$env:ZELLIJ\b'
+        $boot | Should -Match 'inside Zellij'
     }
 }

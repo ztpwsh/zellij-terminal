@@ -75,6 +75,27 @@ $repo = $PSScriptRoot
 # step is worse than one that crashes, because you go and use it.
 $problems = @()
 
+# ...and anything that could not be done FROM HERE, which is a different thing
+# from something that went wrong, and the exit code now says so.
+#
+# The zjstatus grant cannot be written while a Zellij server is running: that
+# server rewrites the file when it exits, so writing now would be undone. That
+# is a condition on the machine, clearable only by the person at it, and every
+# machine upgrading from 0.7.9 or earlier while in use meets it. Reporting it
+# as "install failed" is both untrue - every other file was written and read
+# back - and actively harmful, because the obvious response to a failed install
+# is to run it again, which is the loop that cost a night.
+#
+# So a deferred step exits 2. Still non-zero, so nothing in a chain assumes
+# success; distinguishable from a failure by anything that looks. bootstrap.ps1
+# and Invoke-ZtInstaller both look.
+$deferred = @()
+
+# Set when the grant step deferred, so the verification pass below can report
+# the same fact once rather than twice - and, more importantly, so it does not
+# turn a deferred step into a hard BAD and put the run back on exit 1.
+$script:GrantDeferred = $false
+
 # bootstrap.ps1 gates on this, but README and the zt-setup skill both tell you
 # to run install.ps1 directly, so the gate has to be here too or the documented
 # path is the unguarded one. The module is installed to the pwsh 7 module path,
@@ -98,6 +119,44 @@ $MinZellij = [version]'0.44'
 function Write-Step { param([string]$Text) Write-Host "  $Text" -ForegroundColor Cyan }
 function Write-Note { param([string]$Text) Write-Host "    $Text" -ForegroundColor DarkGray }
 function Write-Warn { param([string]$Text) Write-Host "    $Text" -ForegroundColor Yellow }
+
+# --- are we inside the thing we are installing? -----------------------------
+#
+# REPORT, DO NOT BLOCK. Nesting is not an error and Zellij does not forbid it -
+# `zellij -s <name>` with ZELLIJ set starts a real session that renders its own
+# bar, tested. Refusing would break the one obvious way to upgrade: you are in
+# the session, you read that a new version exists, you paste the one-liner.
+#
+# But three things go wrong only here, and none of them announce themselves:
+#
+#   * a Zellij server is running BY DEFINITION - it is the one you are typing
+#     in - so the permission grant below refuses, every time, on every upgrade
+#     run from inside a session;
+#   * the module junction is swapped underneath a shell that has already
+#     imported ZellijTerminal, so `zt` in this window keeps running the old
+#     copy until the window is closed;
+#   * "delete every session" - the way out of the first point - includes the
+#     one you are reading the instruction in.
+#
+# Nothing anywhere checked $env:ZELLIJ before 0.7.15, so all three were
+# discovered by having them happen.
+$InsideZellij = [bool]$env:ZELLIJ
+if ($InsideZellij) {
+    $zjName = $env:ZELLIJ_SESSION_NAME
+    if (-not $zjName) { $zjName = '(unknown)' }
+
+    Write-Host ''
+    Write-Host "  You are inside Zellij session '$zjName'." -ForegroundColor Yellow
+    Write-Host '  This works - installing from inside a session is not blocked - but:' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '    - a Zellij server is running by definition, so the zjstatus' -ForegroundColor DarkGray
+    Write-Host '      permission grant cannot be written from here;' -ForegroundColor DarkGray
+    Write-Host '    - the module is re-junctioned under a shell that has already' -ForegroundColor DarkGray
+    Write-Host '      imported it, so zt here stays the old copy until you reopen;' -ForegroundColor DarkGray
+    Write-Host '    - "delete every session" includes this one.' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  Run it from an ordinary PowerShell window to avoid all three.' -ForegroundColor Yellow
+}
 
 function Test-ZtOwnHookEntry {
     <#
@@ -390,18 +449,46 @@ if (-not $SkipZellijConfig) {
         if ($alreadyGranted) {
             Write-Note "$permPath (already granted)"
         } elseif ($zjProc.Count -gt 0) {
+            # THE WHOLE SEQUENCE, NOT JUST THE DESTRUCTIVE STEP.
+            #
+            # This used to say "close every session with delete-session and
+            # re-run". Both halves are true and together they are terrible
+            # advice: the only way to act on them is to throw away every Claude
+            # Code conversation that is open, which is a price nobody agrees to
+            # in order to get a status bar back - so the rational response is to
+            # ignore the message, and the machine stays broken.
+            #
+            # zt park and zt restore exist for exactly this and predate the
+            # problem. Park records what is running and stops it; restore brings
+            # it back, resuming each Claude session by its recorded session_id
+            # rather than opening blank ones. Naming them turns "lose your work"
+            # into five commands, and that is the difference between advice that
+            # is followed and advice that is not.
             Write-Warn "NOT granted: a zellij server is running ($($zjProc.Count) process(es))."
             Write-Warn 'It rewrites this file when it exits, so writing now would be undone.'
             Write-Warn ''
-            Write-Warn '  zellij delete-session <name> --force     for every session listed by'
-            Write-Warn '  zellij list-sessions                     then re-run this installer'
+            Write-Warn 'To finish, without losing what you have open:'
+            Write-Warn ''
+            Write-Warn '  zt park                                  record and stop what is running'
+            Write-Warn '  zellij list-sessions                     then, for every name it prints:'
+            Write-Warn '  zellij delete-session <name> --force'
+            Write-Warn "  $(Join-Path $repo 'install.ps1')"
+            Write-Warn '  zac                                      start the session again'
+            Write-Warn '  zt restore                               reopen what was parked'
             Write-Warn ''
             Write-Warn 'DELETE, not kill. A killed session stays resurrectable, and'
             Write-Warn '`attach --create` resurrects it rather than reading the layout - so'
             Write-Warn 'the grant is never re-evaluated and the status bar never appears.'
-            $problems += ('zjstatus was not granted its Zellij permission, because a zellij ' +
-                          'server is running and would overwrite it. Close every session with ' +
-                          'delete-session and re-run; until then there is no status bar.')
+            if ($InsideZellij) {
+                Write-Warn ''
+                Write-Warn 'One of those sessions is this one, so run the sequence from an'
+                Write-Warn 'ordinary PowerShell window rather than from here.'
+            }
+            $deferred += ('zjstatus was not granted its Zellij permission, because a zellij ' +
+                          'server is running and would overwrite it. Finish with: zt park, ' +
+                          'zellij delete-session <name> --force for each session, install.ps1, ' +
+                          'zac, zt restore. Until then there is no status bar.')
+            $script:GrantDeferred = $true
         } else {
             if (-not (Test-Path -LiteralPath $permDir)) {
                 New-Item -ItemType Directory -Path $permDir -Force | Out-Null
@@ -753,9 +840,17 @@ if (-not $SkipZellijConfig) {
                 if (-not $grantText) { $grantText = '' }
             }
             $grantOk = $grantText -match [regex]::Escape(($locFs -replace '\\', '/'))
-            Test-ZtClaim 'zjstatus permitted' $grantOk (
-                "no grant for the path the layout names. Close every session with " +
-                "``zellij delete-session <name> --force`` and re-run; until then there is no status bar")
+            if ($script:GrantDeferred -and -not $grantOk) {
+                # Already reported, in full, with the way out. Repeating it here
+                # as BAD would say the same thing twice in different words and,
+                # worse, would classify a step this run deliberately declined to
+                # take as a step that failed.
+                Write-Warn 'DEFER zjstatus permitted - deferred above, with the sequence to finish it'
+            } else {
+                Test-ZtClaim 'zjstatus permitted' $grantOk (
+                    "no grant for the path the layout names. Close every session with " +
+                    "``zellij delete-session <name> --force`` and re-run; until then there is no status bar")
+            }
 
             if (-not (Test-Path -LiteralPath $locFs)) {
                 # NOT a failure: this script does not download the plugin, and
@@ -942,7 +1037,7 @@ if ((-not $SkipLiveProbe) -and (-not $SkipZellijConfig)) {
     }
 }
 
-if ($verified -and $problems.Count -eq 0) {
+if ($verified -and $problems.Count -eq 0 -and $deferred.Count -eq 0) {
     Write-Note 'every file this installer wrote was read back and is correct'
 }
 
@@ -962,6 +1057,24 @@ if ($problems.Count -gt 0) {
     # printing "keep the clone" after a failed install was the visible symptom;
     # an exit code is what stops the next thing in the chain from assuming.
     exit 1
+}
+
+if ($deferred.Count -gt 0) {
+    # NOT a failure, and the distinction is the whole point of this branch.
+    # Everything this installer is responsible for was written and read back;
+    # one step needs the machine to be in a state only you can put it in. The
+    # sequence to do that was printed where it happened, above.
+    Write-Host "  Installed. $($deferred.Count) step(s) deferred:" -ForegroundColor Yellow
+    Write-Host ''
+    foreach ($d in $deferred) { Write-Host "    $d" -ForegroundColor Yellow }
+    Write-Host ''
+    Write-Host '    zt check           confirm it once you have finished the sequence above' -ForegroundColor White
+    Write-Host ''
+    # 2, not 1 and not 0. Non-zero because a caller must not treat this as a
+    # clean install; not 1 because "install failed" is untrue here and the
+    # response it invites - run the installer again - changes nothing while the
+    # server is still up. bootstrap.ps1 and Invoke-ZtInstaller both branch on 2.
+    exit 2
 }
 
 Write-Host '  Done. Next:' -ForegroundColor Green

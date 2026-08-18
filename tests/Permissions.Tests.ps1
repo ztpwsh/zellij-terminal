@@ -115,6 +115,14 @@ BeforeAll {
 exit `$LASTEXITCODE
 "@
         & pwsh -NoProfile -File $runner | Out-Null
+
+        # Hung on the sandbox rather than returned, so the two existing call
+        # shapes - piped to Out-Null, and assigned to $log - both still work.
+        # The exit code matters here because install.ps1 distinguishes a failed
+        # install (1) from an install with a step deferred (2), and a test that
+        # only reads the log cannot tell which one it just caused.
+        $Sandbox | Add-Member -NotePropertyName ExitCode -NotePropertyValue $LASTEXITCODE -Force
+
         return $log
     }
 
@@ -272,6 +280,60 @@ Describe 'The plugin permission grant' {
                 'writing is the honest outcome')
             $text | Should -Match 'NOT granted'
             $text | Should -Match 'delete-session' -Because 'a refusal has to name the way out'
+        }
+
+        It 'names the whole recovery sequence, not just the destructive step' -Skip:$NoZellijServer {
+            # "Close every session with delete-session and re-run" is true, and
+            # as advice it is unusable: acting on it means throwing away every
+            # Claude Code conversation that is open. Nobody pays that for a
+            # status bar, so the message gets ignored and the machine stays
+            # broken - a correct instruction with a zero completion rate.
+            #
+            # zt park and zt restore already existed for exactly this, which is
+            # what makes the omission worth a test rather than a note: the fix
+            # was never missing, only unmentioned at the one moment it was
+            # needed.
+            $sb = New-ZtSandbox
+            $text = Get-Content -LiteralPath (Invoke-ZtInstallInSandbox $sb -KeepServerCheck) -Raw
+
+            $text | Should -Match '\bzt park\b'    -Because 'the way to not lose your work has to be in the message'
+            $text | Should -Match '\bzt restore\b' -Because 'parking without restoring is just losing your work slowly'
+            $text | Should -Match '\bzac\b'        -Because 'the session has to be started again before restore has anywhere to go'
+        }
+
+        It 'calls that an install with a step deferred, not a failed install' -Skip:$NoZellijServer {
+            # EXIT 2, NOT 1. Every machine upgrading from 0.7.9 or earlier while
+            # it is in use meets this: a Zellij server is running, so the grant
+            # defers. Exiting 1 made `irm | iex` report a failed install on a
+            # machine where every other file had been written and read back -
+            # and the obvious response to a failed install is to run it again,
+            # with the server still up, changing nothing. That loop cost a
+            # night once already.
+            #
+            # Still non-zero, so nothing in a chain can treat it as clean.
+            $sb = New-ZtSandbox
+            $text = Get-Content -LiteralPath (Invoke-ZtInstallInSandbox $sb -KeepServerCheck) -Raw
+
+            $sb.ExitCode | Should -Be 2 -Because $text
+            $text | Should -Match 'deferred'
+            $text | Should -Not -Match 'Finished with \d+ problem' -Because (
+                'a step the machine would not let this run take is not a problem with this run')
+            $text | Should -Not -Match '\bBAD\s+zjstatus permitted' -Because (
+                'the verification pass must not re-report a step that was deliberately deferred')
+        }
+
+        It 'the deferred exit code is read by everything that starts the installer' {
+            # A three-state exit code is only worth having if the callers
+            # branch on it. Two do: bootstrap.ps1, which used to throw "install
+            # failed" here, and Invoke-ZtInstaller, which `zt setup` uses - and
+            # `zt setup` is very often run from inside the session it is setting
+            # up, which is the exact case that defers.
+            $boot  = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'bootstrap.ps1') -Raw
+            $guide = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'module/ZellijTerminal/Public/Guide.ps1') -Raw
+
+            $script:Install | Should -Match 'exit 2'
+            $boot  | Should -Match 'LASTEXITCODE -eq 2'
+            $guide | Should -Match 'LASTEXITCODE -eq 2'
         }
 
         It 'tells you to DELETE the session, never to kill it' {

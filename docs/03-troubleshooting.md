@@ -30,11 +30,25 @@ of the machine this was found on.
 The fix, in this order, and the order is the whole difference:
 
 ```powershell
+zt park                                  # record and stop what is running
 zellij list-sessions
 zellij delete-session <name> --force     # every one of them
 .\install.ps1                            # writes the grant
 zac
+zt restore                               # reopen what was parked
 ```
+
+The first and last lines are why this is worth doing at all. Without them the
+instruction is "throw away every Claude Code session you have open in order to
+get a status bar back", which is a price nobody agrees to — so the advice gets
+ignored and the machine stays broken. `zt park` writes down what is running and
+stops it; `zt restore` brings each workspace back and resumes its Claude session
+by the id it recorded, rather than opening a blank one.
+
+The installer prints this same sequence when it has to defer the grant, and says
+so as *deferred* rather than *failed* — it exits 2, not 1. Everything else it
+was responsible for was written and read back; one step needs the machine in a
+state only you can put it in.
 
 **`delete-session`, not `kill-session`** — see the next entry. And the installer
 refuses to write the grant while a Zellij server is running, because the server

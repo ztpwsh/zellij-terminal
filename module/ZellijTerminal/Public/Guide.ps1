@@ -93,6 +93,18 @@ function Invoke-ZtInstaller {
 
     & $exe -NoProfile -File $script @Arguments
 
+    # 2 means installed with a step deferred, not failed - install.ps1 splits
+    # the two deliberately. `zt setup` is very often run from inside the session
+    # it is setting up, which is precisely the case that defers the zjstatus
+    # grant, so treating 2 as a failure would stop the guide at its most common
+    # starting point. Say it happened, then carry on.
+    if ($LASTEXITCODE -eq 2) {
+        Write-Host ''
+        Write-Host '      install.ps1 installed, with a step deferred - the sequence to' -ForegroundColor Yellow
+        Write-Host '      finish it is printed above' -ForegroundColor Yellow
+        return $true
+    }
+
     # An installer that failed and a guide that carries on to the next step is
     # the pattern install.ps1's own $problems list exists to prevent; do not
     # reintroduce it one process up.

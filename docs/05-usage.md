@@ -164,8 +164,11 @@ no error and nothing in any log on a machine where every file is correct.
 so re-run it after downloading the plugin. Close every session **with
 `delete-session`** first: the Zellij server rewrites that file when it exits, and
 a merely killed session resurrects on the next `attach --create` without ever
-reading the layout or the grant. `zt check` reports the grant as **zjstatus
-permitted**, and warns while any exited session is still resurrectable.
+reading the layout or the grant. Bracket that with `zt park` and `zt restore` so
+closing the sessions costs you nothing —
+[03-troubleshooting.md](03-troubleshooting.md) has the whole sequence. `zt check`
+reports the grant as **zjstatus permitted**, and warns while any exited session
+is still resurrectable.
 
 ### 5. Wire the pad
 
