@@ -295,6 +295,47 @@ function Get-Activity {
     }
 }
 
+# ---------------------------------------------------------------------------
+#  The right-hand strip: what each project is doing, in as few columns as it can
+# ---------------------------------------------------------------------------
+#  WIDTH IS THE SCARCE RESOURCE, and this widget shares it with the tabs.
+#
+#  zjstatus lays the bar out as left + padding + right and does not shrink
+#  either side to fit - over budget it emits a line longer than the pane, which
+#  in a one-row pane wraps and scrolls the tab names out of view entirely. So
+#  every column spent here is a column the tab names do not get, and the way to
+#  spend them is on the projects that need you rather than the ones that are
+#  merely busy:
+#
+#    waiting   `v web-api`   named, because you have to go and find it
+#    working   `~`           one coloured glyph, no name
+#
+#  Nothing is lost by dropping the name from a working project. The tab it
+#  belongs to carries the same glyph, so the name is already on screen a few
+#  columns to the left - printing it again here is what was pushing it off.
+#  Three busy projects cost 5 columns instead of 43.
+#
+#  `wait` comes from the same table as the symbol and the colour, so what this
+#  strip promotes cannot drift from what the glyph says. A record written
+#  before 0.7.17 has no `wait` field at all; $null -eq $true is false, so it
+#  reads as working and corrects itself on that project's next event.
+function Get-ZtStatusLine {
+    param($State)
+
+    $waiting = @()
+    $working = @()
+    foreach ($k in ($State.Keys | Sort-Object)) {
+        $e = $State[$k]
+        if ($e.wait -eq $true) { $waiting += "#[fg=$($e.color)]$($e.symbol) $k" }
+        else                   { $working += "#[fg=$($e.color)]$($e.symbol)" }
+    }
+
+    $groups = @()
+    if ($waiting.Count) { $groups += ($waiting -join '  ') }
+    if ($working.Count) { $groups += ($working -join ' ') }
+    return ($groups -join '  ')
+}
+
 $act = Get-Activity -EventName $hookEvent -Tool $toolName
 
 # ---------------------------------------------------------------------------
@@ -356,6 +397,7 @@ try {
         $state[$project] = [pscustomobject]@{
             symbol = $act.s
             color  = $act.c
+            wait   = $act.wait
             ts     = (Get-Date).ToString('o')
         }
     }
@@ -364,11 +406,7 @@ try {
         Set-Content -LiteralPath $stateFile -Encoding UTF8
 
     # ---- build one line, no newlines allowed -------------------------------
-    $segments = foreach ($k in ($state.Keys | Sort-Object)) {
-        $e = $state[$k]
-        "#[fg=$($e.color)]$($e.symbol) $k"
-    }
-    $line = ($segments -join '  ')
+    $line = Get-ZtStatusLine -State $state
 
     if ($zjSess -and $line) {
         # DO NOT call `zellij pipe` and wait for it.
@@ -486,6 +524,8 @@ exit 0
                  format_left   "{mode} {tabs}"
                  format_right  "{pipe_status}"
 
+                 format_hide_on_overlength "true"
+
                  pipe_status_format     "{output}"
                  pipe_status_rendermode "dynamic"
              }
@@ -500,6 +540,14 @@ exit 0
  zjstatus to interpret the #[fg=...] markup in the piped message instead of
  printing it literally. With the default "static" mode you get grey text and
  visible escape codes.
+
+ `format_hide_on_overlength "true"` is the line that keeps the tab names on
+ screen. zjstatus pads the gap between the two sides with
+ cols.saturating_sub(left + right) and does not shrink either side, so over
+ budget it emits a line longer than the pane; the pane is one row, the
+ overflow wraps, and the tabs scroll out of view leaving only this widget.
+ Set, it drops the right-hand side instead - which is why this script spends
+ as few columns as it can (see Get-ZtStatusLine).
 
  Widget naming: sending  zjstatus::pipe::pipe_status::MSG  feeds the widget
  referenced as {pipe_status} and configured via pipe_status_format.

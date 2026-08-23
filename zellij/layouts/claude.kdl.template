@@ -87,6 +87,32 @@ layout {
                 format_right "{pipe_status} "
                 format_space "#[bg=#181825]"
 
+                // WITHOUT THIS THE TAB NAMES DISAPPEAR, and the bar looks like
+                // it is showing the activity codes and nothing else.
+                //
+                // zjstatus lays the bar out as left + padding + right, and the
+                // padding is `cols.saturating_sub(left + right)` - so when the
+                // two sides together are wider than the terminal it does not
+                // shrink anything, it emits a line LONGER than the pane. The
+                // pane is one row high, so the overflow wraps and scrolls the
+                // start of the line out of view: the mode and the tabs go, the
+                // right-hand codes are what is left. You cannot read a tab name
+                // and you cannot click one, which is the whole navigation
+                // surface gone.
+                //
+                // It is easy to hit. Every project tab is `claude-<leaf>` plus
+                // an activity glyph, and every busy project ALSO gets a segment
+                // on the right - so both sides grow together, once per project.
+                // Three registered projects already needs ~136 columns.
+                //
+                // "true" makes zjstatus drop a part instead of overflowing.
+                // With the default format_precedence (l, c, r) the RIGHT is the
+                // one dropped, which is the correct sacrifice: the activity
+                // codes are a convenience and the tab names are how you steer.
+                // Each tab keeps its own glyph either way, so nothing about
+                // what a project is doing is actually lost.
+                format_hide_on_overlength "true"
+
                 pipe_status_format     "{output}"
                 pipe_status_rendermode "dynamic"
 

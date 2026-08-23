@@ -375,6 +375,60 @@ does **not** do: it does not delete the record. A record with a dead process is
 exactly what a crash leaves behind, and `zt restore` reads those to reopen what
 went down — see `docs/06-workspaces.md`.
 
+### B8 - The tab names vanish and the bar shows only activity codes
+
+**Symptom:** the status bar at the top stops showing tab names. What is left is
+the right-hand run of per-project activity codes, sitting where the tabs used to
+be. You cannot read which tab is which and you cannot click one, so the only way
+left to move between tabs is the pad's blind next/prev.
+
+It arrives gradually rather than all at once - it depends on how wide the window
+is and how many projects are busy - which makes it look like a rendering glitch
+rather than a configuration problem.
+
+**Cause:** zjstatus composes the bar as `format_left` + padding + `format_right`,
+and the padding is `cols.saturating_sub(left + right)`. When the two sides
+together are wider than the terminal there is no padding left to give, and
+zjstatus does not shrink either side: it emits a line LONGER than the pane. The
+pane is `size=1`, so the overflow wraps onto a row that does not exist and takes
+the front of the line - the mode indicator and every tab - out of view with it.
+What survives on screen is the tail, which is the activity codes.
+
+Both sides grow together, once per project: each project gets a tab named
+`claude-<leaf>` plus an activity glyph on the left, and a `<symbol> <leaf>`
+segment on the right while it is busy. Three registered projects already wants
+about 136 columns, so a window that is merely not maximised is enough.
+
+**Fix:** shipped in the layout from 0.7.17.
+
+```
+format_hide_on_overlength "true"
+```
+
+zjstatus then drops a whole part rather than overflowing. With `format_precedence`
+left at its default (`l`, `c`, `r`) the part it drops is the RIGHT one, which is
+the right way round - the activity codes are a convenience and the tab names are
+the navigation. Nothing is actually lost: each tab still carries its own glyph,
+so you can still see which project is doing what.
+
+If your session predates the fix, the layout is only read when a session
+STARTS. Deleting the session is what picks it up - killing one leaves a
+resurrectable corpse that comes back with the old bar:
+
+```powershell
+zellij delete-session claude --force
+```
+
+**Lesson:** a status bar has a width budget and every widget on it spends from
+the same purse. The failure mode of overspending was not a truncated bar, which
+is what you would design for - it was the half you needed most silently
+scrolling off the top of a one-row pane.
+
+**Still true after the fix:** the guard only arbitrates BETWEEN the parts. Tabs
+alone, with enough projects open, can still exceed the width on their own, and
+nothing trims them - `format_left` is the highest-precedence part and is never
+the one dropped.
+
 ## Known traps not yet hit
 
 ### Elevation mismatch (reach mode only)

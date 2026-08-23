@@ -315,6 +315,22 @@ The colour stays on the right-hand widget: Windows Terminal's status plugin
 renders a tab name as plain text, so colour markup in it would print literally.
 Glyph on the tab, colour on the bar, both from the same table.
 
+**The two halves of the bar say different things, because they cost different
+amounts.** The bar is one row and the tabs and this strip spend from the same
+width — see [03-troubleshooting.md](03-troubleshooting.md) B8 for what happens
+when they overspend it. So the strip names only the projects that are *waiting
+for you* (`v`, `!`, `?`), because those are the ones you have to go and find,
+possibly on a tab you cannot see:
+
+```
+ LOCKED  1 home  2 claude-web-api ~  3 claude-web-worker v      v web-worker  ~
+```
+
+A project that is merely working contributes one coloured glyph and no name.
+Nothing is lost by that — its own tab carries the same glyph a few columns to
+the left, and printing the name twice is what used to push the tabs off. Three
+busy projects cost 5 columns rather than 43.
+
 A tab's *identity* is its name without the glyph, which matters if you script
 against it: everything in this rig strips the glyph before comparing, and
 resolves back to the live name before asking Zellij to go to a tab.

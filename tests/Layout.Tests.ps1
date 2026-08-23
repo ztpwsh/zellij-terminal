@@ -121,6 +121,30 @@ Describe 'claude.kdl.template' {
         }
     }
 
+    It 'stops the status bar overflowing its one row' {
+        # The failure this prevents is not cosmetic: zjstatus pads the gap with
+        # `cols.saturating_sub(left + right)`, so an over-wide bar is emitted as
+        # a line longer than the pane rather than being trimmed. In a one-row
+        # pane the overflow wraps and scrolls the front of the line away, taking
+        # the mode and every tab name with it - you are left looking at the
+        # activity codes with no way to read or click a tab.
+        #
+        # Both sides grow once per project, so this arrives with normal use
+        # rather than with an unreasonable number of tabs.
+        ($script:CodeLines | Where-Object {
+            $_ -match '^\s*format_hide_on_overlength\s+"true"' }).Count |
+            Should -Be 1
+    }
+
+    It 'leaves format_precedence at the default, so it is the RIGHT that drops' {
+        # zjstatus blanks the LOWEST-precedence part of an overlapping pair, and
+        # the default order is l,c,r - so the right-hand activity codes go and
+        # the tab names stay. Setting this key at all risks reversing that and
+        # making the guard above sacrifice exactly the wrong half.
+        ($script:CodeLines | Where-Object { $_ -match '^\s*format_precedence\s' }).Count |
+            Should -Be 0
+    }
+
     It 'balances its braces' {
         # Placeholders are braces too and are gone by the time Zellij reads the
         # file, so they come out before counting.

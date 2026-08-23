@@ -556,6 +556,26 @@ if (Test-Path -LiteralPath $zjLayout) {
     # the session starts with no status bar and no explanation.
     $layoutRaw = Get-Content -LiteralPath $zjLayout -Raw
     if ($layoutRaw -match 'zjstatus') {
+        # THE DEPLOYED LAYOUT IS A COPY, and a copy can be older than the
+        # template it came from. This particular line going missing does not
+        # look like a stale deployment - it looks like the tab bar breaking.
+        #
+        # zjstatus pads the gap between its two sides with
+        # cols.saturating_sub(left + right) and shrinks neither, so over budget
+        # it emits a line longer than the pane. The bar pane is one row, so the
+        # overflow wraps and scrolls the mode indicator and every tab name out
+        # of view, leaving only the right-hand activity codes. You cannot read
+        # a tab name or click one. See docs/03-troubleshooting.md B8.
+        if ($layoutRaw -match '(?m)^\s*format_hide_on_overlength\s+"true"') {
+            Add-Result '4 hooks' 'Tab names protected' 'PASS' 'Bar drops the activity codes rather than overflowing its row'
+        } else {
+            Add-Result '4 hooks' 'Tab names protected' 'WARN' (
+                'Deployed layout has no format_hide_on_overlength - the tab names will ' +
+                'scroll off the bar once the tabs and the activity codes together exceed ' +
+                'the window width. Fix: re-run install.ps1, then close every session with ' +
+                'delete-session (a resurrected one keeps the old bar)')
+        }
+
         $wasm = Join-Path $env:APPDATA 'Zellij\data\plugins\zjstatus.wasm'
         if (Test-Path -LiteralPath $wasm) {
             $kb = [int]((Get-Item -LiteralPath $wasm).Length / 1KB)
