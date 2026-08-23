@@ -560,20 +560,31 @@ if (Test-Path -LiteralPath $zjLayout) {
         # template it came from. This particular line going missing does not
         # look like a stale deployment - it looks like the tab bar breaking.
         #
-        # zjstatus pads the gap between its two sides with
-        # cols.saturating_sub(left + right) and shrinks neither, so over budget
-        # it emits a line longer than the pane. The bar pane is one row, so the
-        # overflow wraps and scrolls the mode indicator and every tab name out
-        # of view, leaving only the right-hand activity codes. You cannot read
-        # a tab name or click one. See docs/03-troubleshooting.md B8.
-        if ($layoutRaw -match '(?m)^\s*format_hide_on_overlength\s+"true"') {
-            Add-Result '4 hooks' 'Tab names protected' 'PASS' 'Bar drops the activity codes rather than overflowing its row'
+        # A bar over its width budget is not wrapped and not truncated: the
+        # chunk that does not fit is dropped WHOLE. So an over-long tab list
+        # does not shorten, it vanishes - every name at once, while the mode
+        # indicator and the activity codes carry on painting. A window bounds
+        # what the tab list can ask for. See docs/03-troubleshooting.md B8.
+        $window = [regex]::Match($layoutRaw, '(?m)^\s*tab_display_count\s+"(\d+)"')
+        if ($window.Success) {
+            Add-Result '4 hooks' 'Tab names protected' 'PASS' (
+                "Tab list is windowed to $($window.Groups[1].Value), so it cannot be dropped for being too wide")
         } else {
             Add-Result '4 hooks' 'Tab names protected' 'WARN' (
-                'Deployed layout has no format_hide_on_overlength - the tab names will ' +
-                'scroll off the bar once the tabs and the activity codes together exceed ' +
-                'the window width. Fix: re-run install.ps1, then close every session with ' +
-                'delete-session (a resurrected one keeps the old bar)')
+                'Deployed layout has no tab_display_count - once the tab list is wider than ' +
+                'the bar, EVERY tab name disappears at once and only the activity codes are ' +
+                'left. Fix: re-run install.ps1, then close every session with delete-session ' +
+                '(a resurrected one keeps the old bar)')
+        }
+
+        # 0.7.17 shipped this believing it kept the tab names; rendered with and
+        # without it the painted output was identical, and on a long tab list it
+        # was worse - it dropped the activity codes too and gave back no names.
+        if ($layoutRaw -match '(?m)^\s*format_hide_on_overlength\s+"true"') {
+            Add-Result '4 hooks' 'Overlength guard' 'WARN' (
+                'Deployed layout still sets format_hide_on_overlength. It does not protect ' +
+                'the tab names - measured identical with and without - and it costs you the ' +
+                'activity codes when the tab list is long. Fix: re-run install.ps1')
         }
 
         $wasm = Join-Path $env:APPDATA 'Zellij\data\plugins\zjstatus.wasm'

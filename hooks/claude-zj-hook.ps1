@@ -300,12 +300,14 @@ function Get-Activity {
 # ---------------------------------------------------------------------------
 #  WIDTH IS THE SCARCE RESOURCE, and this widget shares it with the tabs.
 #
-#  zjstatus lays the bar out as left + padding + right and does not shrink
-#  either side to fit - over budget it emits a line longer than the pane, which
-#  in a one-row pane wraps and scrolls the tab names out of view entirely. So
-#  every column spent here is a column the tab names do not get, and the way to
-#  spend them is on the projects that need you rather than the ones that are
-#  merely busy:
+#  A bar over its width budget is not wrapped and not truncated: the chunk that
+#  does not fit is DROPPED WHOLE, and which chunk loses is whichever one does
+#  not fit in what the others left. Rendered into a 280-column probe screen and
+#  read back off the client, 8 tabs beside a 196-column strip painted every tab
+#  name and not one character of the strip. So every column spent here is a
+#  column the tab names do not get, and past the budget this widget simply
+#  stops existing. The way to spend them is on the projects that need you
+#  rather than the ones that are merely busy:
 #
 #    waiting   `v web-api`   named, because you have to go and find it
 #    working   `~`           one coloured glyph, no name
@@ -524,7 +526,7 @@ exit 0
                  format_left   "{mode} {tabs}"
                  format_right  "{pipe_status}"
 
-                 format_hide_on_overlength "true"
+                 tab_display_count "8"
 
                  pipe_status_format     "{output}"
                  pipe_status_rendermode "dynamic"
@@ -541,13 +543,15 @@ exit 0
  printing it literally. With the default "static" mode you get grey text and
  visible escape codes.
 
- `format_hide_on_overlength "true"` is the line that keeps the tab names on
- screen. zjstatus pads the gap between the two sides with
- cols.saturating_sub(left + right) and does not shrink either side, so over
- budget it emits a line longer than the pane; the pane is one row, the
- overflow wraps, and the tabs scroll out of view leaving only this widget.
- Set, it drops the right-hand side instead - which is why this script spends
- as few columns as it can (see Get-ZtStatusLine).
+ `tab_display_count` is the line that keeps the tab names on screen. A bar over
+ its width budget is not wrapped and not truncated - the chunk that does not
+ fit is dropped WHOLE, so an over-long tab list does not shorten, it vanishes,
+ leaving the mode indicator and this widget painting on their own. A window
+ bounds what the tab list can ask for, and zjstatus always keeps the active tab
+ inside it. `format_hide_on_overlength` sounds like the fix and is not: measured
+ with and without, the painted output was identical. This widget still spends as
+ few columns as it can (see Get-ZtStatusLine), because past the budget it is the
+ one that gets dropped.
 
  Widget naming: sending  zjstatus::pipe::pipe_status::MSG  feeds the widget
  referenced as {pipe_status} and configured via pipe_status_format.

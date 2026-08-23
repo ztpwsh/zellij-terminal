@@ -317,13 +317,21 @@ Glyph on the tab, colour on the bar, both from the same table.
 
 **The two halves of the bar say different things, because they cost different
 amounts.** The bar is one row and the tabs and this strip spend from the same
-width — see [03-troubleshooting.md](03-troubleshooting.md) B8 for what happens
-when they overspend it. So the strip names only the projects that are *waiting
-for you* (`v`, `!`, `?`), because those are the ones you have to go and find,
-possibly on a tab you cannot see:
+width — and a bar over budget does not shrink, it drops whichever chunk does not
+fit, whole. See [03-troubleshooting.md](03-troubleshooting.md) B8. So the strip
+names only the projects that are *waiting for you* (`v`, `!`, `?`), because
+those are the ones you have to go and find, possibly on a tab you cannot see:
 
 ```
  LOCKED  1 home  2 claude-web-api ~  3 claude-web-worker v      v web-worker  ~
+```
+
+The tab list is bounded for the same reason — `tab_display_count` keeps a window
+around the tab you are on and counts the rest, so it can never grow big enough
+to be dropped:
+
+```
+ LOCKED  +2  7 claude-web-api  8 claude-web-worker v  +3
 ```
 
 A project that is merely working contributes one coloured glyph and no name.

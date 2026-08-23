@@ -87,31 +87,50 @@ layout {
                 format_right "{pipe_status} "
                 format_space "#[bg=#181825]"
 
-                // WITHOUT THIS THE TAB NAMES DISAPPEAR, and the bar looks like
-                // it is showing the activity codes and nothing else.
+                // WITHOUT THIS THE TAB NAMES DISAPPEAR - all of them, at once,
+                // and the bar looks like it is deliberately showing the
+                // activity codes instead of the tabs.
                 //
-                // zjstatus lays the bar out as left + padding + right, and the
-                // padding is `cols.saturating_sub(left + right)` - so when the
-                // two sides together are wider than the terminal it does not
-                // shrink anything, it emits a line LONGER than the pane. The
-                // pane is one row high, so the overflow wraps and scrolls the
-                // start of the line out of view: the mode and the tabs go, the
-                // right-hand codes are what is left. You cannot read a tab name
-                // and you cannot click one, which is the whole navigation
-                // surface gone.
+                // WHAT ACTUALLY HAPPENS, observed rather than reasoned about.
+                // A bar over its width budget is not wrapped and not truncated:
+                // the chunk that does not fit is DROPPED WHOLE. Rendered into a
+                // 280-column probe screen and read back off the client:
                 //
-                // It is easy to hit. Every project tab is `claude-<leaf>` plus
-                // an activity glyph, and every busy project ALSO gets a segment
-                // on the right - so both sides grow together, once per project.
-                // Three registered projects already needs ~136 columns.
+                //   12 tabs  every name painted, then padding, then the codes
+                //   14 tabs  `LOCKED`, padding, codes - and not one tab name
+                //            anywhere in the capture
+                //   8 tabs + a 196-column strip
+                //            every name painted, and not one character of the
+                //            strip anywhere in the capture
                 //
-                // "true" makes zjstatus drop a part instead of overflowing.
-                // With the default format_precedence (l, c, r) the RIGHT is the
-                // one dropped, which is the correct sacrifice: the activity
-                // codes are a convenience and the tab names are how you steer.
-                // Each tab keeps its own glyph either way, so nothing about
-                // what a project is doing is actually lost.
-                format_hide_on_overlength "true"
+                // So it is all-or-nothing per side, and which side loses is
+                // whichever one does not fit in what the others left. There is
+                // no partial tab list to squint at, which is why this reads as
+                // a rendering glitch rather than as running out of room.
+                //
+                // format_hide_on_overlength does NOT help here and is not set.
+                // Measured with and without on the tabs-too-wide case: the
+                // painted output was identical, because Zellij drops the
+                // over-wide chunk anyway. On 14 tabs it was worse - it took the
+                // codes away too and still gave back no tab names.
+                //
+                // A WINDOW is the fix, because it bounds what {tabs} asks for.
+                // zjstatus keeps `tab_display_count` tabs around the ACTIVE one
+                // and reports the rest as a count, so the list can never grow
+                // big enough to be dropped, and the tab you are on is always in
+                // it. Clicks use the same window, so clicking still lands right.
+                //
+                // 8 is chosen to sit above normal use rather than to fit a
+                // particular terminal: a handful of projects never truncates and
+                // never sees a marker. Note what it does and does not promise -
+                // it bounds the COUNT, not the WIDTH. The list still has to fit,
+                // so the real rule is (window x name length) < your terminal.
+                // At `claude-<leaf>` widths 8 tabs wants about 190 columns; if
+                // you run narrower than that AND keep that many tabs open, lower
+                // this number rather than wondering where the names went.
+                tab_display_count "8"
+                tab_truncate_start_format "#[fg=#6C7086,bg=#181825] +{count} "
+                tab_truncate_end_format   "#[fg=#6C7086,bg=#181825] +{count} "
 
                 pipe_status_format     "{output}"
                 pipe_status_rendermode "dynamic"

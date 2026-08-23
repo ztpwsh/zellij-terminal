@@ -121,27 +121,40 @@ Describe 'claude.kdl.template' {
         }
     }
 
-    It 'stops the status bar overflowing its one row' {
-        # The failure this prevents is not cosmetic: zjstatus pads the gap with
-        # `cols.saturating_sub(left + right)`, so an over-wide bar is emitted as
-        # a line longer than the pane rather than being trimmed. In a one-row
-        # pane the overflow wraps and scrolls the front of the line away, taking
-        # the mode and every tab name with it - you are left looking at the
-        # activity codes with no way to read or click a tab.
+    It 'bounds the tab list, so it can never be dropped for being too wide' {
+        # The failure this prevents is not cosmetic and not gradual. A bar over
+        # budget is not wrapped and not truncated - the chunk that does not fit
+        # is dropped WHOLE, so you lose every tab name at once while the mode
+        # indicator and the activity codes carry on painting. Measured on a
+        # 280-column probe: 12 tabs painted every name, 14 painted none.
         #
-        # Both sides grow once per project, so this arrives with normal use
-        # rather than with an unreasonable number of tabs.
+        # A window bounds what {tabs} asks for, so the list cannot grow big
+        # enough to be dropped, and zjstatus always keeps the ACTIVE tab in it.
         ($script:CodeLines | Where-Object {
-            $_ -match '^\s*format_hide_on_overlength\s+"true"' }).Count |
+            $_ -match '^\s*tab_display_count\s+"\d+"' }).Count |
             Should -Be 1
     }
 
-    It 'leaves format_precedence at the default, so it is the RIGHT that drops' {
-        # zjstatus blanks the LOWEST-precedence part of an overlapping pair, and
-        # the default order is l,c,r - so the right-hand activity codes go and
-        # the tab names stay. Setting this key at all risks reversing that and
-        # making the guard above sacrifice exactly the wrong half.
-        ($script:CodeLines | Where-Object { $_ -match '^\s*format_precedence\s' }).Count |
+    It 'says how many tabs it is not showing, at both ends' {
+        # Without these, truncation is silent: the window just renders fewer
+        # tabs and nothing says the others exist. `{count}` is the only reason
+        # a hidden tab is discoverable rather than apparently gone.
+        foreach ($key in 'tab_truncate_start_format', 'tab_truncate_end_format') {
+            $line = @($script:CodeLines | Where-Object { $_ -match "^\s*$key\s" })
+            $line.Count | Should -Be 1 -Because "$key must be set"
+            $line[0]    | Should -BeLike '*{count}*'
+        }
+    }
+
+    It 'does not set format_hide_on_overlength, which measured as a no-op' {
+        # 0.7.17 shipped this believing it kept the tab names. It does not.
+        # Rendered with and without it on the tabs-too-wide case the painted
+        # output was IDENTICAL, because Zellij drops the over-wide chunk on its
+        # own; and on 14 tabs it was actively worse, taking the activity codes
+        # away as well and still giving back no tab names. Pinned so it is not
+        # reintroduced by someone reading the zjstatus docs and reasoning from
+        # the name, which is exactly how it got in.
+        ($script:CodeLines | Where-Object { $_ -match '^\s*format_hide_on_overlength\s' }).Count |
             Should -Be 0
     }
 

@@ -375,59 +375,83 @@ does **not** do: it does not delete the record. A record with a dead process is
 exactly what a crash leaves behind, and `zt restore` reads those to reopen what
 went down — see `docs/06-workspaces.md`.
 
-### B8 - The tab names vanish and the bar shows only activity codes
+### B8 - Every tab name vanishes at once, leaving only the activity codes
 
-**Symptom:** the status bar at the top stops showing tab names. What is left is
-the right-hand run of per-project activity codes, sitting where the tabs used to
-be. You cannot read which tab is which and you cannot click one, so the only way
-left to move between tabs is the pad's blind next/prev.
+**Symptom:** the status bar stops showing tab names. What is left is the mode
+indicator and the right-hand run of per-project activity codes. You cannot read
+which tab is which and you cannot click one, so the only navigation left is the
+pad's blind next/prev.
 
-It arrives gradually rather than all at once - it depends on how wide the window
-is and how many projects are busy - which makes it look like a rendering glitch
-rather than a configuration problem.
+It does not degrade gracefully. There is no partial list to squint at - the
+names are all there, or all gone - which is why it reads as a rendering glitch
+rather than as the bar running out of room.
 
-**Cause:** zjstatus composes the bar as `format_left` + padding + `format_right`,
-and the padding is `cols.saturating_sub(left + right)`. When the two sides
-together are wider than the terminal there is no padding left to give, and
-zjstatus does not shrink either side: it emits a line LONGER than the pane. The
-pane is `size=1`, so the overflow wraps onto a row that does not exist and takes
-the front of the line - the mode indicator and every tab - out of view with it.
-What survives on screen is the tail, which is the activity codes.
+**Cause:** a bar over its width budget is not wrapped and not truncated. **The
+chunk that does not fit is dropped whole**, and which chunk loses is whichever
+one does not fit in the space the others left.
 
-Both sides grow together, once per project: each project gets a tab named
-`claude-<leaf>` plus an activity glyph on the left, and a `<symbol> <leaf>`
-segment on the right while it is busy. Three registered projects already wants
-about 136 columns, so a window that is merely not maximised is enough.
+Observed rather than reasoned about, by rendering into a 280-column probe screen
+and reading the bar back off the client's own output:
 
-**Fix:** shipped in the layout from 0.7.17.
+| what was on the bar | what got painted |
+|---|---|
+| 12 tabs | every name, then padding, then the codes |
+| 14 tabs | `LOCKED`, padding, codes - and not one tab name anywhere in the capture |
+| 8 tabs plus a 196-column strip | every name, and not one character of the strip anywhere in the capture |
+
+So the bar is not a thing that overflows; it is a set of chunks, each of which
+is present or absent. Both sides grow once per project - a `claude-<leaf>` tab
+plus a glyph on the left, a segment on the right while that project is busy - so
+the budget is spent from both ends at once.
+
+**Fix:** shipped in the layout from 0.7.18.
 
 ```
-format_hide_on_overlength "true"
+tab_display_count "8"
+tab_truncate_start_format "#[fg=#6C7086,bg=#181825] +{count} "
+tab_truncate_end_format   "#[fg=#6C7086,bg=#181825] +{count} "
 ```
 
-zjstatus then drops a whole part rather than overflowing. With `format_precedence`
-left at its default (`l`, `c`, `r`) the part it drops is the RIGHT one, which is
-the right way round - the activity codes are a convenience and the tab names are
-the navigation. Nothing is actually lost: each tab still carries its own glyph,
-so you can still see which project is doing what.
+zjstatus then keeps a window of tabs around the **active** one and reports the
+rest as a count:
+
+```
+ LOCKED  1 home  2 claude-web-api  3 claude-web-frontend  +3
+```
+
+That bounds what the tab list can ask for, so it can never grow big enough to be
+dropped, and the tab you are on is always in the window. Clicks use the same
+window, so clicking still lands on the right tab.
+
+**What this does not promise.** It bounds the **count**, not the **width**. The
+window still has to fit, so the real rule is `window x name length < your
+terminal`. At `claude-<leaf>` widths, eight tabs wants about 190 columns. If you
+run narrower than that *and* keep that many tabs open, lower the number rather
+than wondering where the names went.
+
+**`format_hide_on_overlength` is not the answer, and is deliberately not set.**
+0.7.17 shipped it believing it protected the tab names. Rendered with and
+without it on the tabs-too-wide case, the painted output was **identical** -
+Zellij drops the over-wide chunk either way. On 14 tabs it was worse: it took
+the activity codes away as well and still gave back no tab names.
+`tests/Layout.Tests.ps1` pins its absence, because the name reads exactly like
+the fix and that is how it got in.
 
 If your session predates the fix, the layout is only read when a session
-STARTS. Deleting the session is what picks it up - killing one leaves a
+**starts**. Deleting the session is what picks it up - killing one leaves a
 resurrectable corpse that comes back with the old bar:
 
 ```powershell
 zellij delete-session claude --force
 ```
 
-**Lesson:** a status bar has a width budget and every widget on it spends from
-the same purse. The failure mode of overspending was not a truncated bar, which
-is what you would design for - it was the half you needed most silently
-scrolling off the top of a one-row pane.
-
-**Still true after the fix:** the guard only arbitrates BETWEEN the parts. Tabs
-alone, with enough projects open, can still exceed the width on their own, and
-nothing trims them - `format_left` is the highest-precedence part and is never
-the one dropped.
+**Lesson:** the bar could not be seen, so it was reasoned about instead, and the
+reasoning was wrong in a way that survived a release. `dump-screen` on a plugin
+pane is no help - it exits 0 and returns nothing, which looks like an empty bar
+rather than an unsupported operation. What works is that a headless
+`zellij --layout <file>` client with redirected stdout writes its rendered
+screen as ANSI, and the bar is in it. Anything claimed about this bar should be
+rendered and read back, not derived from the plugin's source.
 
 ## Known traps not yet hit
 
