@@ -45,7 +45,12 @@
 
 [CmdletBinding()]
 param(
-    [string]$Prefix = 'claude-'      # must match claude.kdl and zj-claude-tab.ps1
+    # THE LEGACY PREFIX, and only that. Tabs stopped being named `claude-<leaf>`
+    # in 0.7.20 - seven columns on every tab, on a bar where the chunk that does
+    # not fit is dropped whole. Nothing ADDS it any more; this is what recognises
+    # a tab created before the change, so an old session keeps its tab, its flag
+    # file and its place in the pad's cycle without being renamed.
+    [string]$Prefix = 'claude-'
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -105,7 +110,7 @@ $cwd       = if ($payload.cwd)             { $payload.cwd }             else { (
 $toolName  = $payload.tool_name
 
 $project   = Split-Path $cwd -Leaf
-$tab       = $Prefix + $project
+$tab       = $project          # no prefix since 0.7.20; see -Prefix above
 $zjSess    = $env:ZELLIJ_SESSION_NAME
 $sessionId = $payload.session_id
 
@@ -176,6 +181,10 @@ if ($zjSess) {
         for ($d = 0; $d -lt 6 -and $walk; $d++) {
             $leaf = Split-Path $walk -Leaf
             if (-not $leaf) { break }
+            # BOTH SPELLINGS, new first. A session that predates 0.7.20 is
+            # sitting in a tab called `claude-<leaf>` and must still be found,
+            # or the hook silently decorates nothing and the glyph never moves.
+            $candidates += New-Object psobject -Property @{ Name = $leaf;             Path = $walk }
             $candidates += New-Object psobject -Property @{ Name = ($Prefix + $leaf); Path = $walk }
             $up = Split-Path $walk -Parent
             if (-not $up -or $up -eq $walk) { break }
@@ -321,6 +330,113 @@ function Get-Activity {
 #  strip promotes cannot drift from what the glyph says. A record written
 #  before 0.7.17 has no `wait` field at all; $null -eq $true is false, so it
 #  reads as working and corrects itself on that project's next event.
+function Test-ZtHookLiveRecordAlive {
+    <#
+        Is the session this live record describes still running?
+
+        THIRD COPY OF THIS RULE. The other two are Test-ZtLiveRecordAlive in
+        module\ZellijTerminal\Private\Core.ps1 and IsLiveRecordAlive in
+        cmdpal\...\ZtStore.cs, and tests\Live.Tests.ps1 pins all three together -
+        the hook cannot report a different answer from `zt` about whether a
+        session is alive. It needs its own copy because it must not import the
+        module: it runs under Windows PowerShell 5.1, off the pwsh module path,
+        on the latency path of every session start.
+
+          - no pid at all -> ALIVE. Older records and `zt start` of a pwsh
+            workspace have none, and absence of evidence is not death.
+          - pid gone -> dead.
+          - pid present but that process started AFTER the record -> dead, and
+            the pid has been reused by somebody unrelated.
+    #>
+    param($Record)
+
+    if (-not $Record) { return $false }
+
+    $recPid = $null
+    if ($Record.PSObject.Properties.Name -contains 'pid') { $recPid = $Record.pid }
+    if (-not $recPid) { return $true }
+
+    $n = 0
+    if (-not [int]::TryParse("$recPid", [ref]$n)) { return $true }
+    if ($n -le 0) { return $true }
+
+    $proc = Get-Process -Id $n -ErrorAction SilentlyContinue
+    if (-not $proc) { return $false }
+
+    $startedAt = $null
+    if ($Record.PSObject.Properties.Name -contains 'startedAt') { $startedAt = $Record.startedAt }
+    if ($startedAt) {
+        $when = [datetime]::MinValue
+        if ([datetime]::TryParse("$startedAt", [ref]$when)) {
+            try { if ($proc.StartTime -gt $when) { return $false } } catch { }
+        }
+    }
+
+    return $true
+}
+
+function Remove-ZtDeadStatus {
+    <#
+        Drop projects from the status map whose Claude session is gone.
+
+        THE MAP NEVER FORGOT ANYTHING. Until now the only thing that removed an
+        entry was SessionEnd - and SessionEnd is the event this rig already
+        knows it cannot rely on, because Claude cancels hooks that have not
+        finished as it shuts down and powershell.exe alone costs ~500 ms to
+        start. So a window closed with the X, a reboot, or a killed Claude left
+        its entry behind forever. There was no expiry, no reconciliation and no
+        cap.
+
+        That is a slow failure and it takes the TAB NAMES with it. Both sides of
+        the bar spend from one width budget, and a chunk that does not fit is
+        dropped whole rather than truncated - so the strip grows by two columns
+        per dead project, silently, for days, and then one morning every tab
+        name is gone at once and nothing the user did that day explains it.
+        `tab_display_count` does not help: it bounds the tab COUNT, and this is
+        the other side of the bar.
+
+        CLAUDE_PID is already written into the live record for exactly this -
+        "lets a reader prove the session is gone" is what the comment there
+        says. The status map was the one consumer that never asked.
+
+        Conservative on purpose: an entry is dropped only when a live record
+        exists for it AND that record is provably dead. An entry with NO record
+        is kept, because the hook may have been registered mid-session and
+        guessing dead would erase a project that is running.
+    #>
+    param($State, [string]$LiveDir, [string]$Prefix, [string]$Keep)
+
+    if (-not $State -or $State.Count -eq 0) { return $State }
+    if (-not $LiveDir -or -not (Test-Path -LiteralPath $LiveDir)) { return $State }
+
+    $dead = @{}
+    try {
+        foreach ($f in (Get-ChildItem -LiteralPath $LiveDir -Filter '*.json' -ErrorAction SilentlyContinue)) {
+            $rec = $null
+            try { $rec = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch { continue }
+            if (-not $rec) { continue }
+
+            $recTab = ''
+            if ($rec.PSObject.Properties.Name -contains 'tab') { $recTab = "$($rec.tab)" }
+            if (-not $recTab) { continue }
+
+            # The live name can carry the activity glyph; the identity does not.
+            $base = ($recTab -replace '\s+[^\s]$', '')
+            $base = $base -replace ('^' + [regex]::Escape($Prefix)), ''
+            if (-not $base) { continue }
+
+            if (-not (Test-ZtHookLiveRecordAlive $rec)) { $dead[$base] = $true }
+        }
+    } catch { return $State }
+
+    foreach ($k in @($State.Keys)) {
+        if ($k -eq $Keep) { continue }
+        if ($dead.ContainsKey($k)) { $State.Remove($k) }
+    }
+
+    return $State
+}
+
 function Get-ZtStatusLine {
     param($State)
 
@@ -404,10 +520,17 @@ try {
         }
     }
 
+    # PRUNE BEFORE THE WRITE, not just before the render. Pruning only the
+    # rendered line would leave the dead entries on disk to be re-read, re-
+    # pruned and re-written for ever - correct on screen, and a file that grows
+    # without bound behind it.
+    $state = Remove-ZtDeadStatus -State $state -LiveDir $liveDir -Prefix $Prefix -Keep $project
+
     $state | ConvertTo-Json -Depth 4 -Compress |
         Set-Content -LiteralPath $stateFile -Encoding UTF8
 
     # ---- build one line, no newlines allowed -------------------------------
+    # Already pruned above, before the write.
     $line = Get-ZtStatusLine -State $state
 
     if ($zjSess -and $line) {

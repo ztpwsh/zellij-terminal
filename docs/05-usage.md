@@ -140,7 +140,7 @@ Verify without involving Claude:
 ```powershell
 '{"hook_event_name":"Stop","cwd":"C:/code/api"}' |
   powershell.exe -NoProfile -File .\hooks\claude-zj-hook.ps1
-dir $env:TEMP\claude-zellij-flags        # expect claude-api.json
+dir $env:TEMP\claude-zellij-flags        # expect api.json
 ```
 
 ### 4. Status bar (optional)
@@ -199,7 +199,7 @@ script, because choosing which tab to jump to is real logic.
 | 1 | Ctrl+Shift+F13 | Enter — accept the highlighted option |
 | 2 | Ctrl+Shift+F14 | Esc — reject |
 | 3 | Ctrl+Shift+F15 | jump to whichever session is waiting |
-| 4 | Ctrl+Shift+F16 | cycle `claude-*` tabs |
+| 4 | Ctrl+Shift+F16 | cycle project tabs (the ones in the registry) |
 
 Confirm with `zt check` — it now reports whether the chords are
 actually mapped, which a running-but-unconfigured listener otherwise hides.
@@ -306,8 +306,8 @@ working.
 
 ### The tab says what it is doing
 
-The tab itself carries the same symbol, appended to its name — `claude-web-api ~`
-while that session reads files, `claude-web-api v` when it has finished and is
+The tab itself carries the same symbol, appended to its name — `web-api ~`
+while that session reads files, `web-api v` when it has finished and is
 waiting for you. The hook writes it with `rename-tab -t <id>`, which targets one
 tab without moving your focus.
 
@@ -336,7 +336,7 @@ names only the projects that are *waiting for you* (`v`, `!`, `?`), because
 those are the ones you have to go and find, possibly on a tab you cannot see:
 
 ```
- LOCKED  1 home  2 claude-web-api ~  3 claude-web-worker v      v web-worker  ~
+ LOCKED  1 home  2 web-api ~  3 web-worker v      v web-worker  ~
 ```
 
 The tab list is bounded for the same reason — `tab_display_count` keeps a window
@@ -344,7 +344,7 @@ around the tab you are on and counts the rest, so it can never grow big enough
 to be dropped:
 
 ```
- LOCKED  +2  7 claude-web-api  8 claude-web-worker v  +3
+ LOCKED  +2  7 web-api  8 web-worker v  +3
 ```
 
 A project that is merely working contributes one coloured glyph and no name.
@@ -376,7 +376,7 @@ zt close api                  # closes the tab too
 
 This closes the tab and anything running in it. Because `close-tab` acts on the
 *focused* tab, removal has to focus the target first — so your view will move.
-Two guards make that safe: the name must match `claude-*`, and the tab list is
+Two guards make that safe: the tab must be a registered workspace, and the tab list is
 compared before and after, erroring loudly if anything else disappeared.
 
 ---

@@ -286,21 +286,27 @@ Describe 'Command Palette extension - contract with the module' -Skip:(-not $Has
             $script:ZtStore | Should -Match '"unregistered"'
         }
 
-        It 'uses a prefix the module would derive the same tab name from' -Skip:(-not $HasModule) {
+        It 'derives the same tab name as the module, with no prefix' -Skip:(-not $HasModule) {
             # The only assertion in this file that runs both sides. Get-ZtTabName
-            # is pure, so this needs no Zellij and no config: derive a tab name
-            # with the module's default prefix and check the C# constant is the
-            # front of it. If either moves, the palette jumps to tabs that do
-            # not exist.
+            # is pure, so this needs no Zellij and no config.
+            #
+            # Since 0.7.20 the answer is the bare leaf on both sides. The C#
+            # constant survives ONLY as the legacy spelling to recognise, so this
+            # no longer checks that the constant is the front of the derived
+            # name - it checks the opposite, that it is not.
             $manifest = Join-Path $script:RepoRoot (Join-Path 'module' (Join-Path 'ZellijTerminal' 'ZellijTerminal.psd1'))
             Import-Module $manifest -Force -ErrorAction Stop
             try {
                 $m = Get-Module ZellijTerminal
                 $tab = & $m { Get-ZtTabName -Workspace $null -Path 'C:\code\api' }
+                $tab | Should -Be 'api'
 
                 $constant = [regex]::Match($script:ZtStore, 'TabPrefix\s*=\s*"([^"]*)"').Groups[1].Value
-                $constant | Should -Not -BeNullOrEmpty
-                $tab      | Should -Be ($constant + 'api')
+                $constant | Should -Not -BeNullOrEmpty -Because 'it still has to recognise an old tab'
+                $tab      | Should -Not -BeLike ($constant + '*')
+
+                # And both sides still agree on what an OLD tab reduces to.
+                (& $m { Get-ZtSessionName -Tab 'claude-api' }) | Should -Be 'api'
             } finally {
                 Remove-Module ZellijTerminal -Force -ErrorAction SilentlyContinue
             }
@@ -371,11 +377,24 @@ Describe 'Command Palette extension - contract with the module' -Skip:(-not $Has
     Context 'The derived tab name, and the guard it makes necessary' {
 
         It 'derives a tab name for a workspace with a path and no tab' {
-            # Mirrors Get-ZtTabName: <prefix><leaf> whenever the override and the
+            # Mirrors Get-ZtTabName: the bare leaf whenever the override and the
             # live record have nothing to say. Without it a registered but
             # stopped workspace has no tab name at all, and Start could not be
             # matched back to the tab it creates.
-            $script:ZtStore | Should -Match ([regex]::Escape('if (tab.Length == 0 && path.Length > 0) tab = TabPrefix + SafeLeaf(path);'))
+            #
+            # It was `TabPrefix + SafeLeaf(path)` until 0.7.20. If a prefix comes
+            # back here the palette starts every stopped workspace into a tab the
+            # module then cannot find.
+            $script:ZtStore | Should -Match ([regex]::Escape('tab = SafeLeaf(path);'))
+            $script:ZtStore | Should -Not -Match ([regex]::Escape('TabPrefix + SafeLeaf(path)'))
+        }
+
+        It 'knows which tabs are furniture, now that the prefix cannot say so' {
+            # `claude-` used to exclude `home` for free, by it simply not
+            # carrying one. With no prefix every tab looks adoptable, and the
+            # palette would offer to register the rig's own home tab.
+            $script:ZtStore | Should -Match 'NotWorkspaceTabs'
+            $script:ZtStore | Should -Match '"home"'
         }
 
         It 'GoToCommand refuses to jump while nothing is attached' {

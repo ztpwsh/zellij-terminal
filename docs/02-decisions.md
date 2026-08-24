@@ -137,9 +137,13 @@ checks `list-clients` first and refuses.
 
 ## Naming and addressing
 
-### D8 — The tab-name prefix is the addressing scheme
+### D8 — The tab-name prefix was the addressing scheme
 
-Tabs are named `<prefix><leaf>` — `claude-api` for `C:\code\api`. Three separate
+**Superseded in 0.7.20. The prefix is gone; see D8b below for what replaced it.**
+The original reasoning is kept because the addressing problem it solves did not
+go away — only the answer changed.
+
+Tabs were named `<prefix><leaf>` — `claude-api` for `C:\code\api`. Three separate
 components derive that name the same way and never coordinate: the hook, from
 the `cwd` Claude Code sends on stdin; `zj-claude-tab.ps1`, which filters the tab
 list on the prefix; and `zj-claude-project.ps1`, which creates the tabs.
@@ -176,6 +180,51 @@ does not use the prefix passes through untouched, and so does a collision
 suffix: `claude-api-3f2a` becomes `api-3f2a`, which is still what tells it apart
 from the other `api`.
 
+### D8b — The registry is the addressing scheme, and the name is just a name
+
+**0.7.20.** A tab is named for its project: `web-api`, not `claude-web-api`.
+
+The prefix was not costing style, it was costing **columns**. Both halves of the
+status bar spend from one width budget, and a chunk that does not fit is
+**dropped whole** rather than truncated — so seven characters on every tab is
+the difference between reading your tab names and losing all of them at once.
+On one reported session, five tabs were paying 35 of 133 columns for a word that
+was identical on every one of them.
+
+It could not simply be deleted, because D8 is right that the prefix was the
+*addressing scheme*: `zt next`, `zt prev` and the pad all delegated to
+`zj-claude-tab.ps1 -Pattern 'claude*'`, and the palette carried `TabPrefix` to
+decide which tabs were projects at all. Deleting it without a replacement would
+have stopped tabs cycling, which is the pad's entire job.
+
+So membership moved to the thing that already knows: **the registry.**
+`zj-claude-tab.ps1` reads the device registry, resolving `ZT_CONFIG_HOME`
+exactly as `Get-ZtConfigHome`, `ZtStore.cs` and `Test-Setup.ps1` do — a fourth
+copy of that rule, for the same reason as the other three, because that script
+runs under 5.1 on the pad's latency path and must not import the module. An
+unreadable or empty registry falls back to the old pattern rather than reporting
+nothing to cycle on a session full of tabs.
+
+**The migration is an asymmetry: creation stopped using the prefix, recognition
+did not.** `Get-ZtSessionName` still strips a leading `claude-`, so a tab made
+before the change and one made after reduce to the same identity — an existing
+session keeps its tab, its glyph, its flag file and its place in the cycle
+without being renamed, and the pad's registry match tries the legacy spelling
+too, or a session mixing old and new tabs would cycle only the new ones and read
+as the pad skipping tabs at random.
+
+**The cost, recorded rather than left to be found:** a folder *literally* called
+`claude-something` is ambiguous, because recognition cannot tell a legacy prefix
+from a folder that genuinely starts with one — `claude-tools` derives the tab
+`claude-tools`, which recognition reduces to `tools`, which the registry does
+not hold. Not hypothetical in a repo about Claude. `zt add . -Name claude-tools`
+is the escape hatch: an explicit name is returned verbatim.
+
+**What replaced the safety guard.** D8 notes the prefix also stopped `-Remove`
+closing a tab outside the managed namespace. That guard is now the registry
+membership test, which is strictly narrower: it names the tabs that are
+workspaces rather than the tabs that happen to start with a word.
+
 ### D10 — One startup tab, not a tab per project
 
 `claude.kdl` opens exactly one tab, `home`, with `cwd` at the repo, running `zt`.
@@ -183,7 +232,8 @@ A Zellij session must have at least one tab, so "start with none" means "start
 with one that is not a project". It runs `zt` because on a cold start the only
 question you have is what have I got: on a fresh install that prints the
 "nothing registered yet" hint, and afterwards the workspace table with states.
-It is deliberately **not** named `claude-*`, so the cycle keys walk past it.
+It is deliberately **not registered**, which is what keeps the cycle keys walking
+past it since 0.7.20 dropped the name prefix — see D8b.
 
 **Rejected:** hardcoding project tabs in the layout. That is what the first
 install did, and it produced duplicates immediately — the layout opened a tab on

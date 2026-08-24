@@ -373,15 +373,33 @@ function Get-ZtTabName {
     <#
         Tab names must agree with what the hook derives from cwd and what
         zj-claude-tab.ps1 cycles, or the pad jumps to tabs that do not exist.
-        Default is the historic <prefix><leaf>; an explicit name on the
-        workspace wins, which is how two folders called 'api' stop fighting
-        over one tab name.
+        An explicit name on the workspace wins, which is how two folders called
+        'api' stop fighting over one tab name.
+
+        NO PREFIX SINCE 0.7.20. A tab is now named for its project - `web-api`,
+        not `claude-web-api`. Seven columns per tab, on a bar where both sides
+        spend from one width budget and the chunk that does not fit is dropped
+        WHOLE: five projects were paying 35 columns for a word that is the same
+        on every tab and tells you nothing.
+
+        $Prefix is still accepted and still passed by callers, because it is
+        what Get-ZtTabBase strips to recognise a LEGACY `claude-*` tab. It is
+        deliberately NOT applied here: creation stopped using it, recognition
+        did not. That asymmetry is the whole migration - an old tab called
+        `claude-web-api` and a new one called `web-api` both reduce to the same
+        base, so a session that predates this keeps cycling, keeps resolving and
+        keeps its flag file without being renamed.
+
+        Membership moved with it. `claude-` used to be how the pad decided which
+        tabs to cycle, so dropping it needed a real answer rather than a shorter
+        string: zj-claude-tab.ps1 now asks the device registry which tabs are
+        workspaces, and falls back to the old pattern when it cannot read one.
     #>
-    param($Workspace, [string]$Path, [string]$Prefix = 'claude-')
+    param($Workspace, [string]$Path, [string]$Prefix = '')
 
     $explicit = Get-ZtProp $Workspace 'name'
     if ($explicit) { return $explicit }
-    return ($Prefix + (Split-Path $Path -Leaf))
+    return (Split-Path $Path -Leaf)
 }
 
 function Get-ZtTerminalProfilePaths {

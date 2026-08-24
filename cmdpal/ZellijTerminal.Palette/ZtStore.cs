@@ -30,7 +30,18 @@ internal sealed record ZtWorkspace(
 internal static class ZtStore
 {
     private const string SessionName = "claude";
+    // THE LEGACY PREFIX, and only that. Tabs stopped being named `claude-<leaf>`
+    // in 0.7.20 - seven columns on every tab, on a bar where the chunk that does
+    // not fit is dropped whole. Nothing adds it any more. It survives here so a
+    // tab created before the change still reduces to the same base the registry
+    // holds, which is what lets an old session keep working without a rename.
     private const string TabPrefix = "claude-";
+
+    // Session furniture: real tabs that are not workspaces and never should be
+    // offered for adoption. `claude-` used to exclude these for free, because
+    // they simply did not carry it. Losing the prefix means saying so.
+    private static readonly HashSet<string> NotWorkspaceTabs =
+        new(StringComparer.OrdinalIgnoreCase) { "home" };
 
     private static string LiveDir =>
         Path.Combine(
@@ -288,12 +299,20 @@ internal static class ZtStore
         var listed = result.Select(w => w.Tab).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var tab in tabs)
         {
-            if (!tab.StartsWith(TabPrefix, StringComparison.OrdinalIgnoreCase)) continue;
             if (listed.Contains(tab)) continue;
+
+            // Base first, so a legacy `claude-web-api` and a new `web-api` are
+            // the same workspace rather than two rows.
+            var baseName = tab.StartsWith(TabPrefix, StringComparison.OrdinalIgnoreCase)
+                ? tab[TabPrefix.Length..]
+                : tab;
+            if (baseName.Length == 0) continue;
+            if (NotWorkspaceTabs.Contains(baseName)) continue;
+            if (listed.Contains(baseName)) continue;
 
             var (waiting, waitEvent) = ReadFlag(tab);
             result.Add(new ZtWorkspace(
-                tab[TabPrefix.Length..], string.Empty, "unregistered",
+                baseName, string.Empty, "unregistered",
                 waiting, waitEvent, "unknown", tab, string.Empty, string.Empty));
         }
 
@@ -315,7 +334,7 @@ internal static class ZtStore
 
         var tab = Str(def, "name");
         if (tab.Length == 0) tab = Str(live, "tab");
-        if (tab.Length == 0 && path.Length > 0) tab = TabPrefix + SafeLeaf(path);
+        if (tab.Length == 0 && path.Length > 0) tab = SafeLeaf(path);   // no prefix since 0.7.20
 
         var hasTab = tab.Length > 0 && tabs.Contains(tab, StringComparer.OrdinalIgnoreCase);
         var available = path.Length > 0 && Directory.Exists(path);

@@ -416,7 +416,7 @@ zjstatus then keeps a window of tabs around the **active** one and reports the
 rest as a count:
 
 ```
- LOCKED  1 home  2 claude-web-api  3 claude-web-frontend  +3
+ LOCKED  1 home  2 web-api  3 web-frontend  +3
 ```
 
 That bounds what the tab list can ask for, so it can never grow big enough to be

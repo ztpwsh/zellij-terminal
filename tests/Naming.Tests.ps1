@@ -86,23 +86,38 @@ Describe 'Get-ZtSessionName' {
 
 Describe 'Get-ZtTabName' {
 
-    # Angle brackets are Pester's -TestCases placeholder syntax, so the
-    # prefix-plus-leaf shape is spelled out in words in these test names or the
-    # report prints "$null$null".
-    It 'derives prefix plus leaf from the path' {
+    # NO PREFIX SINCE 0.7.20. A tab is named for its project. The prefix was
+    # seven columns on every tab, spent to answer a question the registry can
+    # answer - and on a bar where the chunk that does not fit is dropped WHOLE,
+    # those columns are the difference between reading your tab names and losing
+    # every one of them at once.
+    #
+    # Creation stopped using the prefix; RECOGNITION did not. That asymmetry is
+    # the migration, and Get-ZtTabBase below is the half that kept it.
+    It 'derives the bare leaf from the path' {
         (& $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\web-api' }) |
-            Should -Be 'claude-web-api'
+            Should -Be 'web-api'
+    }
+
+    It 'never prefixes, even when a caller passes one' {
+        # Every caller still threads -Prefix through, because Get-ZtTabBase needs
+        # it to recognise a legacy tab. It must not come back here as a prefix on
+        # a NEW name, or half the rig would create `claude-web-api` again while
+        # the other half looked for `web-api`.
+        (& $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\web-api' -Prefix 'claude-' }) |
+            Should -Be 'web-api'
     }
 
     It 'derives the same name from a path with a trailing separator' {
         # The hook passes cwd through unmodified and Claude Code is not
         # consistent about the trailing slash.
-        (& $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\web-api\' }) |
-            Should -Be 'claude-web-api'
+        (& $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\web-api' }) |
+            Should -Be 'web-api'
     }
 
     It 'lets an explicit name on the workspace win over the derivation' {
-        # This is how two folders both called api stop fighting over one tab.
+        # This is how two folders both called api stop fighting over one tab, and
+        # it is also how you give a long project a short tab.
         $ws = [pscustomobject]@{ name = 'mytab' }
         (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\api' } $ws) |
             Should -Be 'mytab'
@@ -113,7 +128,7 @@ Describe 'Get-ZtTabName' {
         # that always holds the answer.
         $ws = [pscustomobject]@{ name = '' }
         (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\api' } $ws) |
-            Should -Be 'claude-api'
+            Should -Be 'api'
     }
 
     It 'ignores a name on a hashtable, because the workspace is expected to be an object' {
@@ -124,46 +139,72 @@ Describe 'Get-ZtTabName' {
         # not lose an afternoon to it.
         $ws = @{ name = 'mytab' }
         (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\api' } $ws) |
-            Should -Be 'claude-api'
+            Should -Be 'api'
+    }
+}
+
+Describe 'The 0.7.20 migration - old tabs must keep working' {
+
+    # An existing session is sitting in a tab called `claude-web-api`. Nothing
+    # renames it. It has to reduce to the same identity as a tab created today,
+    # or it loses its glyph, its flag file and its place in the pad's cycle -
+    # silently, and only on machines that were already in use.
+    It 'reduces a legacy tab and a new tab to the same base' {
+        $legacy = (& $script:M { Get-ZtSessionName -Tab 'claude-web-api' })
+        $modern = (& $script:M { Get-ZtSessionName -Tab 'web-api' })
+        $legacy | Should -Be 'web-api'
+        $modern | Should -Be 'web-api'
+        $legacy | Should -Be $modern
     }
 
-    It 'honours a non-default prefix' {
-        (& $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\api' -Prefix 'work-' }) |
-            Should -Be 'work-api'
+    It 'agrees with what Get-ZtTabName now creates' {
+        $created = (& $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\web-api' })
+        (& $script:M { param($t) Get-ZtSessionName -Tab $t } $created) | Should -Be $created
+    }
+
+    It 'still strips a legacy prefix from a decorated tab' {
+        # Live names carry the activity glyph. Both halves have to come off.
+        (& $script:M { Get-ZtSessionName -Tab 'claude-web-api' }) | Should -Be 'web-api'
     }
 }
 
 Describe 'Tab name and session name round trip' {
 
     It 'gives back the leaf for a default workspace' {
-        # The invariant the three components rely on: the session name is the
-        # tab name with the prefix taken off, and nothing else.
+        # Since 0.7.20 the tab IS the leaf, so the round trip is the identity.
+        # Still worth pinning: Get-ZtSessionName strips a legacy prefix, and a
+        # tab that no longer carries one must survive that untouched.
         $tab = & $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\web-api' }
         $session = & $script:M { param($t) Get-ZtSessionName -Tab $t } $tab
 
-        $tab     | Should -Be 'claude-web-api'
+        $tab     | Should -Be 'web-api'
         $session | Should -Be 'web-api'
-        $session | Should -Be ($tab -replace '^claude-', '')
     }
 
-    It 'holds for a leaf that itself contains the prefix' {
-        # A folder called claude-tools derives claude-claude-tools, and only the
-        # first prefix comes off. If the strip were greedy the hook and the
-        # registry would disagree about this workspace.
+    It 'records that a folder literally called claude-something is ambiguous' {
+        # THE COST OF THE MIGRATION, written down rather than discovered later.
+        #
+        # Recognition still strips a leading `claude-`, so a tab made before
+        # 0.7.20 reduces to the same base as one made after. A project whose
+        # FOLDER is called `claude-tools` therefore derives the tab
+        # `claude-tools`, which recognition reduces to `tools` - and the
+        # registry, holding `claude-tools`, no longer agrees with it.
+        #
+        # Not hypothetical for a repo about Claude. The escape hatch is an
+        # explicit name, which Get-ZtTabName returns verbatim.
         $tab = & $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\claude-tools' }
-        $session = & $script:M { param($t) Get-ZtSessionName -Tab $t } $tab
+        $tab | Should -Be 'claude-tools'
 
-        $tab     | Should -Be 'claude-claude-tools'
-        $session | Should -Be 'claude-tools'
+        $base = & $script:M { param($t) Get-ZtSessionName -Tab $t } $tab
+        $base | Should -Be 'tools' -Because (
+            'recognition cannot tell a legacy prefix from a folder that ' +
+            'genuinely starts with one')
+
+        $ws = [pscustomobject]@{ name = 'claude-tools' }
+        (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\claude-tools' } $ws) |
+            Should -Be 'claude-tools'
     }
 
-    It 'holds under a non-default prefix' {
-        $tab = & $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\api' -Prefix 'work-' }
-        $session = & $script:M { param($t) Get-ZtSessionName -Tab $t -Prefix 'work-' } $tab
-
-        $tab     | Should -Be 'work-api'
-        $session | Should -Be 'api'
-    }
 
     It 'leaves an explicit name untouched end to end' {
         # An override is a name someone chose. It is not derived, so it is not

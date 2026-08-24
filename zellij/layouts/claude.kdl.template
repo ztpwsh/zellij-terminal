@@ -26,9 +26,18 @@
 //   project. Keep here only the tabs you always want on startup.
 //
 // WHY THE NAMES MATTER
-//   Every project tab is named claude-* so zj-claude-tab.ps1 can cycle
-//   between just those and skip anything that is not a project. The prefix must agree with
-//   the -Pattern argument there and the -Prefix in claude-zj-hook.ps1.
+//   A project tab is named for its project - `web-api`, not `claude-web-api`.
+//   The prefix went in 0.7.20: seven columns on every tab, on a bar where the
+//   chunk that does not fit is dropped WHOLE rather than truncated.
+//
+//   It used to be how zj-claude-tab.ps1 told a project tab from your editor or
+//   log tab, so it could not simply be deleted - that script asks the device
+//   registry now, and falls back to the old `claude*` pattern when it cannot
+//   read one. A tab made before 0.7.20 still cycles, because recognition still
+//   strips a leading `claude-` even though nothing adds one.
+//
+//   The `home` tab below is deliberately NOT registered, and that is now what
+//   keeps the pad's cycle keys walking past it.
 //
 // WINDOWS PATHS
 //   Use forward slashes. Backslashes need escaping in KDL and are a common

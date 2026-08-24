@@ -37,7 +37,16 @@ param(
     [switch]$Waiting,
 
     [string]$Session = 'claude',
+    # LEGACY FALLBACK ONLY - see "WHICH TABS ARE PROJECTS?" below. Membership
+    # comes from the registry now; this is what that falls back to when no
+    # registry can be read, and what still matches tabs made before 0.7.20.
     [string]$Pattern = 'claude*',
+
+    # The prefix those older tabs carry. Nothing ADDS it any more; this is how a
+    # tab called `claude-web-api` is recognised as the workspace the registry
+    # calls `web-api`, so a session that predates 0.7.20 keeps cycling instead
+    # of quietly dropping out of the pad's rotation.
+    [string]$Prefix = 'claude-',
 
     # Full path to zellij.exe, because PATH cannot be relied on here.
     #
@@ -177,7 +186,82 @@ $names = @(
     }
 )
 
-$targets = @($names | Where-Object { $_ -like $Pattern })
+# ---------------------------------------------------------------------------
+#  WHICH TABS ARE PROJECTS?
+# ---------------------------------------------------------------------------
+#  This used to be `-like 'claude*'`, and that string was the only thing making
+#  the prefix load-bearing: tabs were called `claude-<leaf>` so that this line
+#  could tell a project from your editor or log tab. Seven columns on every tab,
+#  every day, to answer a question the registry can already answer - and on a bar
+#  where the chunk that does not fit is dropped WHOLE, those columns are the
+#  difference between reading your tab names and losing all of them at once.
+#
+#  So ask the registry. It is the same file `zt` reads, resolved the same way -
+#  $env:ZT_CONFIG_HOME wins, else %LOCALAPPDATA%\ZellijTerminal - which is the
+#  rule written in Get-ZtConfigHome, ZtStore.cs and Test-Setup.ps1, and pinned
+#  across all of them by test. This is the fourth copy and it is here for the
+#  same reason as the others: this script runs under 5.1 on the pad's latency
+#  path and must not import the module.
+#
+#  FALLING BACK IS NOT OPTIONAL. If the registry cannot be read - fresh machine,
+#  redirected config home, a corrupt file - cycling must still work rather than
+#  reporting "nothing to cycle" on a session full of tabs. So an unreadable or
+#  empty registry falls back to the old pattern, which also covers every tab
+#  created before 0.7.20.
+function Get-ZtRegisteredTabBases {
+    $home_ = $env:ZT_CONFIG_HOME
+    if (-not $home_) {
+        $base = $env:LOCALAPPDATA
+        if (-not $base) { return @() }
+        $home_ = Join-Path $base 'ZellijTerminal'
+    }
+
+    $files = @(
+        (Join-Path $home_ ('devices\' + $env:COMPUTERNAME + '.json')),
+        (Join-Path $home_ 'workspaces.json')
+    )
+
+    $out = @()
+    foreach ($f in $files) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        try { $doc = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json } catch { continue }
+        if (-not $doc) { continue }
+        foreach ($w in @($doc.workspaces)) {
+            if (-not $w) { continue }
+            # An explicit name wins, exactly as Get-ZtTabName has it; otherwise
+            # the tab is the leaf of whatever path this device resolved.
+            $n = $null
+            if ($w.PSObject.Properties.Name -contains 'name' -and $w.name) { $n = "$($w.name)" }
+            if (-not $n -and $w.PSObject.Properties.Name -contains 'rel' -and $w.rel) { $n = Split-Path "$($w.rel)" -Leaf }
+            if (-not $n -and $w.PSObject.Properties.Name -contains 'abs' -and $w.abs) { $n = Split-Path "$($w.abs)" -Leaf }
+            if (-not $n -and $w.PSObject.Properties.Name -contains 'id'  -and $w.id ) { $n = "$($w.id)" }
+            if ($n) { $out += $n }
+        }
+    }
+    return @($out | Sort-Object -Unique)
+}
+
+$registered = @()
+try { $registered = @(Get-ZtRegisteredTabBases) } catch { $registered = @() }
+
+if ($registered.Count -gt 0) {
+    # MATCH THE LEGACY SPELLING TOO. A tab opened before 0.7.20 is called
+    # `claude-<leaf>` while the registry holds `<leaf>`, and a session mixing
+    # old and new tabs would otherwise cycle only the new ones - which reads as
+    # the pad skipping tabs at random rather than as a migration.
+    $targets = @($names | Where-Object {
+        $n = $_
+        if ($registered -contains $n) { return $true }
+        if ($Prefix -and $n.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            return ($registered -contains $n.Substring($Prefix.Length))
+        }
+        return $false
+    })
+    # A registry that lists nothing OPEN is not a reason to refuse to cycle.
+    if ($targets.Count -eq 0) { $targets = @($names | Where-Object { $_ -like $Pattern }) }
+} else {
+    $targets = @($names | Where-Object { $_ -like $Pattern })
+}
 
 # No project tabs is the normal cold start now that the layout opens only
 # `home`, so this is not an error and must not exit non-zero: the pad calls this

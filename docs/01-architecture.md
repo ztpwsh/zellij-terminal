@@ -61,7 +61,7 @@ explicitly:
 ```powershell
 zellij --session claude action write 13              # Enter
 zellij --session claude action write 27              # Esc
-zellij --session claude action go-to-tab-name "claude-api"
+zellij --session claude action go-to-tab-name "api"
 zellij --session claude action query-tab-names
 zellij --session claude action current-tab-info
 zellij --session claude pipe "zjstatus::pipe::pipe_status::..."
@@ -86,7 +86,7 @@ as their primary record of the current tab.
 
 ## Layer 4 — target and feedback
 
-Claude Code runs one instance per Zellij tab, tabs named `claude-<project>` to
+Claude Code runs one instance per Zellij tab, tabs named for the project to
 match the leaf folder of the project directory. That naming is load-bearing —
 `hooks/claude-zj-hook.ps1` derives the tab name from the `cwd` on stdin, and
 `scripts/zj-claude-tab.ps1` filters on the prefix.
