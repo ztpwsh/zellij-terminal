@@ -428,7 +428,15 @@ if (Test-Path -LiteralPath $hookScript) {
             -RedirectStandardError  (Join-Path $probe 'err.txt') `
             -NoNewWindow -PassThru
         $p.WaitForExit()
-        $wrote = Test-Path (Join-Path $probe 'claude-zellij-flags\claude-probe.json')
+        # A FLAG FILE IS NAMED FOR THE TAB, and the tab lost its `claude-`
+        # prefix in 0.7.20 - so this looked for `claude-probe.json` and the hook
+        # correctly wrote `probe.json`. It read as the hook being broken, which
+        # is exactly the wrong conclusion and exactly what this row exists to
+        # avoid. Both spellings are accepted: a machine still running an older
+        # hook has to pass this too.
+        $flagDir = Join-Path $probe 'claude-zellij-flags'
+        $wrote = (Test-Path (Join-Path $flagDir 'probe.json')) -or
+                 (Test-Path (Join-Path $flagDir 'claude-probe.json'))
         if ($p.ExitCode -eq 0 -and $wrote) {
             Add-Result '4 hooks' 'Hook script runs' 'PASS' 'Stop payload wrote a flag under powershell.exe'
         } elseif ($p.ExitCode -eq 0) {

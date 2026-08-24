@@ -144,4 +144,5 @@ the real `TEMP`.
 dir $env:TEMP\claude-zellij-flags
 ```
 
-A file called `claude-api.json` should appear.
+A file called `api.json` should appear — a flag file is named for the tab, and
+tabs lost the `claude-` prefix in 0.7.20.
