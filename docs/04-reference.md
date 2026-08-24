@@ -9,8 +9,10 @@
 | `zt import <file>` | merge one back in; `-Force` overwrites what is already here |
 | `zt uninstall` | remove what the installer added; `-WhatIf` first, `-Purge` for registrations too, `-Force` when nothing can prompt |
 | `zt` | list this device's workspaces and their state |
+| `zt home` | that list, plus the commands and pad keys you actually use. What the `home` tab opens on |
 | `zt ls` / `zt all` / `zt waiting` | filtered lists; `all` includes ones this device can't reach |
 | `zt add [path]` — also `register` | register a folder for Claude (defaults to here) |
+| `zt add . -Start` | register it **and** open its tab. Registering and opening are usually one intent the first time |
 | `zt add . -Kind pwsh -Command '…'` | register a command instead; omit `-Command` for a bare shell |
 | `zt add -FromBookmarks` | import Windows Terminal profiles that launch Claude; `-Filter` by name, `-IncludeAll` for the rest |
 | `zt rm <id>` — also `remove`, `unregister`, `forget` | unregister; also stops it unless `-KeepRunning`. The **directory is untouched** |

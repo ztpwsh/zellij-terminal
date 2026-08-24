@@ -125,7 +125,7 @@ If you would rather do it by hand:
 
 ```powershell
 zac                   # start the session
-zt add .              # register a project, from inside it
+zt add . -Start       # register a project from inside it, and open its tab
 zt check              # verify every layer
 ```
 
@@ -210,7 +210,9 @@ Both exist because guessing costs hours and these cost seconds.
 | `zt uninstall` | remove everything the installer added; `-WhatIf` first |
 | `zt export [path]` · `zt import <file>` | back up your setup, or move it to another machine |
 | `zt` · `zt ls` · `zt waiting` | list, filtered |
+| `zt home` | that list, plus the commands and pad keys worth knowing |
 | `zt add [path]` · `zt unregister <id>` | register, unregister — `register`, `rm`, `remove` and `forget` all work, and the folder is never touched |
+| `zt add . -Start` | register **and** open its tab, which is usually one intent the first time |
 | `zt add . -Kind pwsh -Command '…'` | a command instead of Claude; omit `-Command` for a bare shell |
 | `zt add -FromBookmarks` | import your Windows Terminal profiles as workspaces |
 | `zt start` · `stop` · `restart` · `close` | lifecycle; omit the id for a picker |
@@ -223,7 +225,12 @@ Both exist because guessing costs hours and these cost seconds.
 | `zt config` · `zt roots` | the JSON, and what paths mean here |
 
 Every verb is a `Verb-ZellijTerminal` function underneath, so they tab-complete
-and take named parameters. `zt help` lists the lot.
+and take named parameters. `zt help` lists the lot, and `zt help -Full` adds
+setup, diagnostics, the pad and the palette.
+
+Two that look like a pair and are not: **`zt close` closes the tab** and keeps
+the registration, while **`zt rm` forgets the workspace** and leaves the folder
+alone. `remove` is an alias for `rm`, not for `close`. Neither deletes files.
 
 ## Documentation
 

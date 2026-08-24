@@ -46,17 +46,37 @@ function Invoke-ZtForward {
         if ($raw.StartsWith('-') -and $raw.Length -gt 1 -and $raw -notmatch '^-\d') {
             $name = $raw.Substring(1)
 
-            # -Switch:$false is ordinary PowerShell and arrives here as the
-            # single token "-Confirm:False". Without splitting on the colon the
-            # whole thing is treated as a parameter NAME, matches nothing, and
-            # gets passed through positionally - where it bound "False" to the
-            # first positional parameter and produced a ValidateSet error about
-            # a parameter the caller never mentioned.
+            # -Switch:$false is ordinary PowerShell. Without splitting on the
+            # colon the whole thing is treated as a parameter NAME, matches
+            # nothing, and gets passed through positionally - where it bound
+            # "False" to the first positional parameter and produced a
+            # ValidateSet error about a parameter the caller never mentioned.
+            #
+            # IT DOES NOT ARRIVE AS ONE TOKEN. This code was written believing
+            # `-Confirm:$false` reached ValueFromRemainingArguments as the single
+            # string "-Confirm:False". It does not - PowerShell splits it into
+            # TWO elements, the string "-Confirm:" and the BOOLEAN $false:
+            #
+            #   [1] String  [-Confirm:]
+            #   [2] Boolean [False]
+            #
+            # so the value half was an empty string, which is not $null, which
+            # took the inline-value branch and evaluated `'' -notmatch false` to
+            # TRUE. `zt rm x -Confirm:$false` therefore turned confirmation ON
+            # and then threw on the leftover `False` - a safety flag inverted by
+            # the code that exists to forward it. Only `-Confirm:0`, an Int32,
+            # behaves the same way, so this is every form of it.
             $inlineValue = $null
+            $extra       = 0
             $colon = $name.IndexOf(':')
             if ($colon -ge 0) {
                 $inlineValue = $name.Substring($colon + 1)
                 $name        = $name.Substring(0, $colon)
+
+                if ($inlineValue -eq '' -and ($i + 1) -lt $Arguments.Count) {
+                    $inlineValue = "$($Arguments[$i + 1])"
+                    $extra       = 1
+                }
             }
 
             $p = @($cmd.Parameters.Values | Where-Object {
@@ -67,14 +87,15 @@ function Invoke-ZtForward {
             }
 
             if ($p -and $null -ne $inlineValue) {
-                # The value came attached to the name, so do not eat the next
-                # argument as well.
+                # The value came attached to the name - either in the same token
+                # or, for `-Switch:$false`, as the element after it, which $extra
+                # accounts for.
                 if ($p.SwitchParameter) {
                     $named[$p.Name] = ($inlineValue -notmatch '^(?i)(false|0|\$false)$')
                 } else {
                     $named[$p.Name] = $inlineValue
                 }
-                $i++
+                $i += (1 + $extra)
             } elseif ($p -and $p.SwitchParameter) {
                 $named[$p.Name] = $true
                 $i++
@@ -145,87 +166,242 @@ function Invoke-ZtPaste {
     }
 }
 
+function Write-ZtHelpLine {
+    <#
+        One row of the help table. Split so the command and its explanation can
+        be coloured differently - the whole point of not using Get-Help.
+    #>
+    param([string]$Command, [string]$Does, [string]$Indent = '  ')
+
+    # An empty Command with a Does is a CONTINUATION line - the description
+    # carrying on under the one above it. The first version returned a blank
+    # line for that case, which silently dropped every continuation in the file
+    # and left a gap where the explanation should have been.
+    if (-not $Command -and -not $Does) { Write-Host ''; return }
+    if (-not $Does) { Write-Host ($Indent + $Command) -ForegroundColor White; return }
+
+    Write-Host ($Indent + $Command.PadRight(26)) -NoNewline -ForegroundColor White
+    Write-Host $Does -ForegroundColor DarkGray
+}
+
+function Write-ZtHelpHeading {
+    param([string]$Text)
+    Write-Host ''
+    Write-Host ('  ' + $Text) -ForegroundColor Cyan
+}
+
+function Show-ZtHelp {
+    <#
+        WHY THIS IS NOT `Get-Help Invoke-ZellijTerminal -Detailed`.
+
+        It was, and what a user got was a cmdlet reference wrapped around the
+        useful part: NAME, SYNOPSIS, a full SYNTAX line reading
+        `Invoke-ZellijTerminal [[-Verb] <String>] [-Rest <Object[]>]` - which is
+        not how anyone types this - and then, at the bottom, REMARKS advising
+        them to run `Get-Help Invoke-ZellijTerminal -Examples` to see examples.
+        Asking for help and being told to run a longer command to get the rest
+        of the help is the wrong answer for a tool whose entire pitch is a short
+        verb surface.
+
+        Two things this must say that the old one did not:
+
+          - `zac`. It is one of only two aliases this module exports and it is
+            the first command install.ps1 tells you to run, and it appeared
+            nowhere in the help. The help listed `zt attach` instead, so the
+            name you were taught and the name you were shown were different.
+
+          - that `remove` and `close` are not the pair they look like. See the
+            comment on the dispatch table.
+    #>
+    param([switch]$Full)
+
+    Write-Host ''
+    Write-Host '  zt' -NoNewline -ForegroundColor Green
+    Write-Host ' - the workspaces you run inside one Zellij session.' -ForegroundColor Gray
+
+    Write-ZtHelpHeading 'Getting to the session'
+    Write-ZtHelpLine 'zac' 'attach, or focus the window already attached.'
+    Write-ZtHelpLine '' 'The one command that works before you are inside.'
+    Write-ZtHelpLine 'zt attach' 'the same thing, spelled the long way'
+
+    Write-ZtHelpHeading 'Looking'
+    Write-ZtHelpLine 'zt' 'what is registered on this device, and its state'
+    Write-ZtHelpLine 'zt ls [filter]' 'same, filtered'
+    Write-ZtHelpLine 'zt all' 'include ones this device cannot reach'
+    Write-ZtHelpLine 'zt waiting' 'only the ones asking for input'
+    Write-ZtHelpLine 'zt home' 'the table plus this rig''s cheat sheet'
+
+    Write-ZtHelpHeading 'Registering a folder'
+    Write-ZtHelpLine 'zt add [path]' 'register it for Claude (defaults to here)'
+    Write-ZtHelpLine 'zt add . -Start' '...and open its tab now'
+    Write-ZtHelpLine 'zt add . -Kind pwsh -Command ''<cmd>''' ''
+    Write-ZtHelpLine '' '...run a command there instead of Claude'
+    Write-ZtHelpLine 'zt add . -Kind pwsh' '...or just a shell, running nothing'
+    Write-ZtHelpLine 'zt rm <id>' 'unregister - the folder is untouched'
+    Write-ZtHelpLine 'zt publish <id>' 'promote it to the shared config'
+
+    Write-ZtHelpHeading 'Running one'
+    Write-ZtHelpLine 'zt start [id]' 'open its tab and run its command'
+    Write-ZtHelpLine 'zt stop [id]' 'Ctrl+C what is running, keep the shell'
+    Write-ZtHelpLine 'zt restart [id]' 'stop, then resume the same Claude session'
+    Write-ZtHelpLine 'zt close [id]' 'close the TAB, keep the registration'
+    Write-ZtHelpLine 'zt pick' 'choose one with the arrow keys and go to it'
+    Write-Host ''
+    Write-Host '    Leave the id off any of those and you get the picker, or' -ForegroundColor DarkGray
+    Write-Host '    tab-complete it:  zt start <tab>' -ForegroundColor DarkGray
+
+    Write-ZtHelpHeading 'Moving between them'
+    Write-ZtHelpLine 'zt go' 'jump to whoever is waiting'
+    Write-ZtHelpLine 'zt next | zt prev' 'cycle claude-* tabs'
+    Write-ZtHelpLine 'zt flag [id]' 'raise its hand so key 3 jumps to it'
+    Write-ZtHelpLine 'zt unflag [id]' 'lower it again'
+
+    Write-ZtHelpHeading 'A whole day'
+    Write-ZtHelpLine 'zt park' 'stop everything, remember what was running'
+    Write-ZtHelpLine 'zt restore' 'bring it back, resuming each conversation'
+    Write-ZtHelpLine 'zt sync' 'drop records whose tabs are gone'
+
+    # TWO VERBS THAT LOOK LIKE A PAIR AND ARE NOT. Worth the ink: `remove` is
+    # accepted for muscle memory and routes to UNREGISTER, while the cmdlet
+    # actually named Remove-ZellijTerminalTab is what `close` calls. Someone
+    # leaning on tab-completion meets this at the worst possible moment.
+    Write-Host ''
+    Write-Host '  Careful:' -ForegroundColor Yellow
+    Write-Host '    zt close   closes the TAB and keeps the registration.' -ForegroundColor Gray
+    Write-Host '    zt rm      forgets the WORKSPACE and leaves the folder alone.' -ForegroundColor Gray
+    Write-Host '    `zt remove` is an alias for rm, NOT for close - they are' -ForegroundColor Gray
+    Write-Host '    opposite ends of the thing, and neither deletes any files.' -ForegroundColor Gray
+
+    Write-ZtHelpHeading 'First five minutes on a machine that is already set up'
+    Write-Host '    zac                       start or attach the session'   -ForegroundColor White
+    Write-Host '    cd C:\code\web-api'                                       -ForegroundColor White
+    Write-Host '    zt add . -Start           register it and open its tab'   -ForegroundColor White
+    Write-Host '    zt                        see it listed as running'       -ForegroundColor White
+    Write-Host '    zt go                     later, jump to whoever wants you' -ForegroundColor White
+
+    if (-not $Full) {
+        Write-Host ''
+        Write-Host '  zt help -Full' -NoNewline -ForegroundColor White
+        Write-Host '             setup, diagnostics, the pad, the palette' -ForegroundColor DarkGray
+        Write-Host ''
+        return
+    }
+
+    Write-ZtHelpHeading 'Setting up and checking'
+    Write-ZtHelpLine 'zt setup' 'guided setup - walks every layer, explains it,'
+    Write-ZtHelpLine '' 'offers to do it. Start here on a new machine.'
+    Write-ZtHelpLine 'zt check' 'layer check on this machine'
+    Write-ZtHelpLine 'zt diag' 'one evidence bundle to a file, for reading'
+    Write-ZtHelpLine '' 'elsewhere. Use it when check is clean and'
+    Write-ZtHelpLine '' 'the rig still does not work.'
+    Write-ZtHelpLine 'zt validate' 'check the JSON and say what is wrong'
+    Write-ZtHelpLine 'zt config' 'open the JSON in your editor'
+    Write-ZtHelpLine 'zt uninstall' 'remove what install.ps1 put here. Keeps your'
+    Write-ZtHelpLine '' 'registrations; -Purge drops those too;'
+    Write-ZtHelpLine '' '-WhatIf shows it first.'
+
+    Write-ZtHelpHeading 'Where things live'
+    Write-ZtHelpLine 'zt roots' 'what root names mean on this device'
+    Write-ZtHelpLine 'zt root <name> <path>' 'define one'
+    Write-ZtHelpLine 'zt export [path]' 'save registrations, roots and the palette'
+    Write-ZtHelpLine '' 'setup to one portable file'
+    Write-ZtHelpLine 'zt import <path>' 'merge one back in; -Force to overwrite'
+
+    Write-ZtHelpHeading 'The hardware and the shells around it'
+    Write-ZtHelpLine 'zt pad' 'what the macro pad is wired to'
+    Write-ZtHelpLine 'zt pad explain' 'what it is for, and whether you need one'
+    Write-ZtHelpLine 'zt pad install' 'wire it up (PowerToys; -Listener ahk)'
+    Write-ZtHelpLine 'zt paste' 'why Ctrl+V shreds a multi-line paste in Zellij'
+    Write-ZtHelpLine 'zt paste fix' 'fix it - both halves, with backups'
+    Write-ZtHelpLine 'zt palette' 'what the Command Palette extension adds'
+    Write-ZtHelpLine 'zt hotkeys' 'the palette''s global command hotkeys'
+    Write-ZtHelpLine 'zt dock' 'pin the workspace band to the palette dock'
+    Write-ZtHelpLine 'zt sessions' 'Zellij SESSIONS - the level above tabs'
+    Write-ZtHelpLine 'zt sessions kill <name>' 'stop a stray one'
+
+    Write-Host ''
+    Write-Host '  Every verb also has PowerShell help:  Get-Help Register-ZellijTerminal -Full' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+function Show-ZtHome {
+    <#
+        What the `home` tab lands on. The workspace table answers "what have I
+        got"; the rest answers "and what do I type", which is the question a tab
+        that opens on a cold start is actually being asked.
+
+        Deliberately a PRINT, not a loop. A refreshing dashboard would be a
+        resident process in a pane for information that changes a few times an
+        hour, and this rig does not add resident processes.
+
+        The pad rows come from Get-ZtPadKeyMap - the same definition that writes
+        the remaps and checks them - so a cheat sheet cannot describe keys the
+        pad is not wired to.
+    #>
+    Write-Host ''
+    Write-Host '  zt' -NoNewline -ForegroundColor Green
+    Write-Host ' - what you have, and what to type.' -ForegroundColor Gray
+
+    Get-ZellijTerminal | Format-ZtTable
+
+    Write-Host '  Most of what you need' -ForegroundColor Cyan
+    Write-ZtHelpLine 'zt go' 'jump to whoever is waiting'
+    Write-ZtHelpLine 'zt pick' 'choose a workspace with the arrow keys'
+    Write-ZtHelpLine 'zt add . -Start' 'register the folder you are in, and open it'
+    Write-ZtHelpLine 'zt start | stop | restart' 'run one, halt it, resume the conversation'
+    Write-ZtHelpLine 'zt park / zt restore' 'put the day down, pick it back up'
+
+    $keys = $null
+    try { $keys = @(Get-ZtPadKeyMap) } catch { $keys = @() }
+    if ($keys.Count -gt 0) {
+        Write-Host ''
+        Write-Host '  The pad' -ForegroundColor Cyan
+        foreach ($k in $keys) {
+            Write-ZtHelpLine ("key " + $k.Key + "  " + $k.Chord) $k.Does
+        }
+    }
+
+    Write-Host ''
+    Write-Host '  zt help' -NoNewline -ForegroundColor White
+    Write-Host '                   everything else' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
 function Invoke-ZellijTerminal {
     <#
     .SYNOPSIS
         Short command surface: zt <verb> [args].
 
     .DESCRIPTION
-        zt                       list workspaces on this device
-        zt ls [filter]           same, with a filter
-        zt all                   include ones this device cannot reach
-        zt waiting               list only sessions asking for input
+        The full verb table is printed by `zt help`, and `zt help -Full` adds
+        setup, diagnostics, the pad and the palette.
 
-        zt add [path]            register a folder for Claude (defaults to here)
-        zt add . -Kind pwsh -Command '<cmd>'
-                                 ...to run a command there instead
-        zt add . -Kind pwsh      ...or just a shell, running nothing
-        zt rm <id>               unregister it - also: unregister, forget
-        zt publish <id>          promote it to the shared config
+        It is deliberately NOT repeated here. This block used to carry the whole
+        surface, which meant two copies of it with nothing keeping them in step,
+        and `zt help` rendered this one wrapped in NAME / SYNOPSIS / SYNTAX plus
+        a REMARKS footer advising the reader to run a second command to see the
+        examples. Show-ZtHelp is now the one copy.
 
-        zt pick                  choose one with the arrow keys and go to it
+        The shape, so this page is not useless on its own:
 
-        zt start [id]            open its tab and run its command
-        zt stop [id]             Ctrl+C what is running, keep the shell
-        zt restart [id]          stop, then resume the same Claude session
-        zt close [id]            close the tab, keep the registration
-
-        Leave the id off any of those and you get the picker. Tab-complete
-        it if you would rather type: `zt start <tab>`.
-
-        zt attach                attach, or focus the window already attached
-        zt next | zt prev        cycle tabs
-        zt go                    jump to whoever is waiting
-        zt sync                  drop records whose tabs are gone
-        zt flag [id]             raise its hand so key 3 jumps to it
-        zt unflag [id]           lower it again
-
-        zt park                  stop everything, remember what was running
-        zt restore               bring it back, resuming each conversation
-
-        zt setup                 guided setup - walks every layer, explains it,
-                                 offers to do it. Start here on a new machine.
-        zt uninstall             remove everything install.ps1 put on this
-                                 machine. Keeps your registrations; -Purge drops
-                                 those too. -WhatIf shows it first.
-
-        zt export [path]         save registrations, roots and the Command
-                                 Palette setup to one portable file
-        zt import <path>         merge one back in; -Force to overwrite
-
-        zt roots                 what root names mean on this device
-        zt root <name> <path>    define one
-        zt config                open the JSON in your editor
-        zt validate              check the JSON and say what is wrong
-        zt check                 layer check
-        zt diag                  write one evidence bundle to a file, for
-                                 reading somewhere else. Use it when `zt check`
-                                 is clean and the rig still does not work
-
-        zt pad                   what the macro pad is wired to
-        zt pad explain           what it is for, and whether you need one
-        zt pad install           wire it up (PowerToys; -Listener ahk)
-        zt pad uninstall         unwire it
-
-        zt paste                 why Ctrl+V shreds a multi-line paste inside
-                                 Zellij, and whether this machine is fixed
-        zt paste fix             fix it - both halves, with backups
-
-        zt palette               what the Command Palette extension adds
-
-        zt sessions              Zellij SESSIONS - the level above tabs
-        zt sessions kill <name>  stop a stray one
-
-        zt hotkeys               Command Palette's global command hotkeys
-
-        zt dock                  pin the workspace band to the palette dock
-        zt dock -List            what is on the dock now
-
-        zt help                  this
+            zac                 attach, or focus the window already attached
+            zt                  what is registered here, and its state
+            zt home             that table plus a cheat sheet
+            zt add . -Start     register the folder you are in and open its tab
+            zt go               jump to whoever is waiting
+            zt help             all of it
 
     .EXAMPLE
         zt
+        Lists every workspace registered on this device, with its state.
+
+    .EXAMPLE
+        zt add . -Start
+        Registers the current folder and opens its tab in one step.
+
+    .EXAMPLE
         zt start api -Resume
+        Opens the api tab and resumes its previous Claude conversation.
     #>
     [CmdletBinding()]
     param(
@@ -296,7 +472,17 @@ function Invoke-ZellijTerminal {
         '^sessions?$'      { return (Invoke-ZtSessions $Rest) }
         '^hotkeys?$'       { return (Invoke-ZtForward 'Get-ZellijTerminalHotkey' $Rest) }
         '^dock$'           { if ($Rest -contains '-List' -or $Rest -contains '-list') { return (Get-ZellijTerminalDock) }; return (Invoke-ZtForward 'Add-ZellijTerminalDock' $Rest) }
-        '^(help|-h|--help)$' { return (Get-Help Invoke-ZellijTerminal -Detailed) }
+        '^home$'           { return (Show-ZtHome) }
+
+        # NOT Get-Help. See the comment on Show-ZtHelp: the cmdlet reference
+        # buried the verb table in SYNTAX and NAME, and signed off by telling
+        # you to run a second, longer command to see the examples.
+        '^(help|-h|--help|\?)$' {
+            if ($Rest -contains '-Full' -or $Rest -contains '-full' -or $Rest -contains 'full') {
+                return (Show-ZtHelp -Full)
+            }
+            return (Show-ZtHelp)
+        }
 
         default {
             # `zt api` most likely means "show me api", not a typo worth an
@@ -443,7 +629,7 @@ Register-ArgumentCompleter -CommandName 'Invoke-ZellijTerminal' -ParameterName '
     # something like `zt setup` defeats the point of it existing.
     $verbs = @('setup', 'uninstall', 'export', 'import', 'ls', 'all', 'waiting', 'pick', 'add', 'rm', 'publish', 'start', 'stop', 'restart',
                'close', 'attach', 'next', 'prev', 'go', 'sync', 'flag', 'unflag', 'park', 'restore', 'roots', 'root',
-               'config', 'validate', 'check', 'diag', 'pad', 'paste', 'palette', 'dock', 'sessions', 'hotkeys', 'help')
+               'config', 'validate', 'check', 'diag', 'pad', 'paste', 'palette', 'dock', 'sessions', 'hotkeys', 'home', 'help')
     $verbs |
         Where-Object   { $_ -like "$wordToComplete*" } |
         ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }

@@ -36,7 +36,9 @@ rig's commands work from any directory without a `.\scripts\` prefix:
 
 ```powershell
 zt                    # what is registered, and what is running
+zt home               # that, plus the commands and pad keys worth knowing
 zt add .              # register the folder you are in
+zt add . -Start       # ...and open its tab now
 zt start api          # open its tab and run it
 zt stop api           # Ctrl+C it, keep the shell
 zt restart api        # stop, then resume the same Claude session
@@ -259,6 +261,17 @@ zt add .
 Claude in it. Registering and starting are separate on purpose — the registry
 outlives any particular tab, which is what makes stop, restart and "what do I
 have on this machine" mean anything.
+
+They are usually the same intent the first time, though, so say so in one:
+
+```powershell
+zt add . -Start
+```
+
+**Not the default**, and it never will be: the hook calls the same registration
+on every session start, so a default `-Start` would reopen tabs underneath you.
+Plain `zt add` now prints the `zt start <id>` line rather than leaving "and how
+do I actually open it" as an exercise.
 
 Most of the time you will not type `zt add` at all: a Claude session started in
 a folder registers itself, and shows up the next time you run `zt`.

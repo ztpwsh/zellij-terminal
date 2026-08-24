@@ -180,6 +180,18 @@ function Register-ZellijTerminal {
         # how it knows what to start.
         [switch]$PassThru,
 
+        # Open its tab straight away. Registering and opening are almost always
+        # the same intent the first time you point this at a folder, and they
+        # were two commands with nothing linking them.
+        #
+        # Off by default on purpose: the hook calls this on every session start,
+        # so a default -Start would reopen tabs underneath you, and registration
+        # is meant to work with no session attached.
+        [switch]$Start,
+
+        # Which session -Start opens the tab in.
+        [string]$Session = 'claude',
+
         [string]$Prefix = 'claude-'
     )
 
@@ -377,6 +389,27 @@ function Register-ZellijTerminal {
             Write-Host ("  no root matches this path, so it is device-only. Define one with: " +
                         "Set-ZellijTerminalRoot <name> <path>") -ForegroundColor DarkGray
         }
+    }
+
+    # REGISTERING AND OPENING ARE ALMOST ALWAYS THE SAME INTENT the first time,
+    # and they were two commands with nothing connecting them: `zt add .`
+    # printed a registration and stopped, leaving "and now how do I actually
+    # open it" as an exercise. So say it, always - a hint costs one line and is
+    # read by the person who needs it - and offer -Start for when it is what you
+    # meant.
+    #
+    # NOT the default. Registration is a fact about the folder and works with no
+    # session attached; starting is an action that needs one, and silently
+    # opening a tab because you registered something is the kind of surprise
+    # this rig has no business springing. The hook calls this on EVERY session
+    # start, which is the other reason: a default -Start would have it reopening
+    # tabs underneath you.
+    if ($Start) {
+        if ($PSCmdlet.ShouldProcess($Id, 'Open its tab')) {
+            Start-ZellijTerminal -Name $Id -Session $Session -Prefix $Prefix
+        }
+    } elseif ($existing.Count -eq 0) {
+        Write-Host ("  open it with:  zt start {0}   (or -Start next time)" -f $Id) -ForegroundColor DarkGray
     }
 
     if ($PassThru) { return $entry }

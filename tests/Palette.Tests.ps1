@@ -306,6 +306,50 @@ Describe 'Command Palette extension - contract with the module' -Skip:(-not $Has
             }
         }
 
+        It 'invokes nothing the module cannot answer' -Skip:(-not $HasModule) {
+            # The hand-written list above names EIGHT verbs somebody decided to
+            # check. This reads every module command the palette actually calls
+            # out of the C# and checks all of them, including the named
+            # parameters - so a renamed parameter is caught, not just a renamed
+            # command, and a call added to the palette next year is covered
+            # without anybody remembering to add a row here.
+            #
+            # A break is silent by construction: the palette starts pwsh, pwsh
+            # fails, and the palette redraws the list. There is no error anyone
+            # sees except a line in palette.log saying a non-zero exit.
+            $all = ''
+            foreach ($f in (Get-ChildItem -LiteralPath $script:PaletteDir -Filter '*.cs')) {
+                $all += (Get-Content -LiteralPath $f.FullName -Raw)
+            }
+
+            $calls = @([regex]::Matches($all, '"((?:Get|Set|New|Remove|Start|Stop|Restart|Test|Connect|Publish|Import|Export|Sync|Edit|Switch|Suspend|Resume|Unregister|Register)-ZellijTerminal[A-Za-z]*)((?:\s+-[A-Za-z]+(?::\$?[A-Za-z0-9]+)?)*)') |
+                        ForEach-Object { @{ Name = $_.Groups[1].Value; Args = $_.Groups[2].Value } })
+
+            $calls.Count | Should -BeGreaterThan 10 -Because (
+                'if the extraction matches nothing this test passes having checked nothing')
+
+            $manifest = Join-Path $script:RepoRoot (Join-Path 'module' (Join-Path 'ZellijTerminal' 'ZellijTerminal.psd1'))
+            Import-Module $manifest -Force -ErrorAction Stop
+            $problems = @()
+            try {
+                foreach ($call in $calls) {
+                    $cmd = Get-Command $call.Name -ErrorAction SilentlyContinue
+                    if (-not $cmd) { $problems += "no such command: $($call.Name)"; continue }
+
+                    foreach ($m in [regex]::Matches($call.Args, '-([A-Za-z]+)')) {
+                        $pn = $m.Groups[1].Value
+                        $known = ($cmd.Parameters.Keys -contains $pn) -or
+                                 @($cmd.Parameters.Values | Where-Object { $_.Aliases -contains $pn }).Count -gt 0
+                        if (-not $known) { $problems += "$($call.Name) has no -$pn" }
+                    }
+                }
+            } finally {
+                Remove-Module ZellijTerminal -Force -ErrorAction SilentlyContinue
+            }
+
+            ($problems -join '; ') | Should -BeNullOrEmpty
+        }
+
         It 'agrees with the module on the whole state vocabulary' {
             # These strings are compared against by the page (which tags rows
             # with them) and produced by the module (which the user reads in

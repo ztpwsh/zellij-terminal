@@ -79,7 +79,7 @@ If `zt` is not recognised in a *new* shell, the junction did not land. Check
 
 ```powershell
 zac                   # opens a Windows Terminal window on the session
-zt add .              # from inside a project folder
+zt add . -Start       # from inside a project folder: register it, open its tab
 zt start <id>
 ```
 
