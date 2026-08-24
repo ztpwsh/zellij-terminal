@@ -217,8 +217,31 @@ as the pad skipping tabs at random.
 `claude-something` is ambiguous, because recognition cannot tell a legacy prefix
 from a folder that genuinely starts with one — `claude-tools` derives the tab
 `claude-tools`, which recognition reduces to `tools`, which the registry does
-not hold. Not hypothetical in a repo about Claude. `zt add . -Name claude-tools`
-is the escape hatch: an explicit name is returned verbatim.
+not hold. Not hypothetical in a repo about Claude.
+
+**There was no escape hatch, and 0.7.22 stopped offering one.** This said to
+pass `-Name claude-tools`, because an explicit name was returned verbatim. It
+was returned verbatim only when `Get-ZtTabName` was called without `-Prefix`,
+which no caller in the rig does — and recognition reduced the resulting tab out
+from under any match regardless. An explicit name now goes through the same
+reduction as a derived one, so no tab can be named `claude-anything`. The prefix
+is gone from tab names in every direction, which is the simpler rule and the
+true one.
+
+**The rest of that migration was still outstanding, and 0.7.22 is the sweep.**
+The prefix was doing double duty: a display convention *and* a membership test,
+"is this tab called `claude-*`?". Dropping it from creation left four places
+asking a question with no true answer — `Get-ZtTabName` on a stored legacy name,
+the collision comparison in `Register-ZellijTerminal`, the unregistered-tab
+filter in `Get-ZtWorkspaceRecords`, and the project-tab count in `zt check`.
+None of them errored. Each matched nothing, and matching nothing is
+indistinguishable from there being nothing to match, so `zt check` reported a
+healthy machine while four live project tabs were being called stopped,
+invisible or absent. The invariant that catches the class: **the name the
+registry derives must be a fixed point of the reduction recognition applies**,
+and `tests/Naming.Tests.ps1` asserts it directly rather than testing each site's
+return value in isolation — which is why the suite stayed green through all of
+it.
 
 **What replaced the safety guard.** D8 notes the prefix also stopped `-Remove`
 closing a tab outside the managed namespace. That guard is now the registry

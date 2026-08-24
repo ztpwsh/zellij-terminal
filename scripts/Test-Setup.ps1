@@ -61,6 +61,62 @@ function Get-DeviceConfigPath {
     return (Join-Path $home_ (Join-Path 'devices' ($device + '.json')))
 }
 
+# Tabs the layout opens that are not workspaces. Same list as $ZtLayoutTabs in
+# module\ZellijTerminal\Private\Core.ps1 and the same reason: since 0.7.20 there
+# is no prefix to recognise a project tab by, so the honest test is to exclude
+# the one tab we know is not one and ask the registry about the rest.
+$ZtLayoutTabs = @('home')
+
+function Get-TabIdentity {
+    <#
+        Strip the activity glyph the hook appends, then a legacy `claude-`
+        prefix, leaving the string the registry can be compared against. Both
+        halves come off - this is the same reduction as Get-ZtTabBase followed
+        by Get-ZtSessionName, and `zt check` needs its own copy for the same
+        reason Get-DeviceConfigPath has one.
+    #>
+    param([string]$Name)
+    if (-not $Name) { return $Name }
+    $b = ($Name -replace ' [v!?*>~#@&+.]$', '')
+    if ($Prefix -and $b.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $s = $b.Substring($Prefix.Length)
+        if ($s) { return $s }
+    }
+    return $b
+}
+
+function Get-RegisteredTabBases {
+    <#
+        Which tabs are projects, according to this device's registry. Mirrors
+        Get-ZtRegisteredTabBases in scripts\zj-claude-tab.ps1, including its
+        precedence: an explicit name wins, then the leaf of rel, then of abs,
+        then the id. An explicit name is reduced too, because a registry written
+        before 0.7.22 can hold `claude-<leaf>` there.
+
+        An unreadable registry returns nothing, and the caller falls back rather
+        than reporting an empty session. Failing open is the right failure here:
+        this is a diagnostic, and a diagnostic that lies about a healthy machine
+        is the thing this whole file exists to avoid.
+    #>
+    $out  = @()
+    $file = Get-DeviceConfigPath
+    if (-not (Test-Path -LiteralPath $file)) { return @() }
+    try { $d = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json } catch { return @() }
+    if (-not $d) { return @() }
+    if ($d.PSObject.Properties.Name -notcontains 'workspaces') { return @() }
+
+    foreach ($w in @($d.workspaces)) {
+        if (-not $w) { continue }
+        $n = $null
+        if ($w.PSObject.Properties.Name -contains 'name' -and $w.name) { $n = Get-TabIdentity "$($w.name)" }
+        if (-not $n -and $w.PSObject.Properties.Name -contains 'rel' -and $w.rel) { $n = Split-Path "$($w.rel)" -Leaf }
+        if (-not $n -and $w.PSObject.Properties.Name -contains 'abs' -and $w.abs) { $n = Split-Path "$($w.abs)" -Leaf }
+        if (-not $n -and $w.PSObject.Properties.Name -contains 'id'  -and $w.id ) { $n = "$($w.id)" }
+        if ($n) { $out += $n }
+    }
+    return @($out | Sort-Object -Unique)
+}
+
 Write-Host ''
 Write-Host '  Macro pad rig - layer check' -ForegroundColor Cyan
 Write-Host '  ---------------------------' -ForegroundColor Cyan
@@ -216,23 +272,37 @@ if ($zellij) {
         # so the two empty cases say different things. A tab that is genuinely
         # missing behind a record that claims to be running shows up as `stale`
         # in `zt` and is cleared with `zt sync`; that is the check for it.
-        $matching = @($tabs | Where-Object { $_ -like "$Prefix*" })
+        #
+        # COUNTED FROM THE REGISTRY SINCE 0.7.22, the way zj-claude-tab.ps1 does
+        # it. This asked `-like "$Prefix*"` of names that stopped carrying the
+        # prefix in 0.7.20, so the two rows contradicted each other in the same
+        # output - query-tab-names PASS listing four project tabs, immediately
+        # below "None open - 33 registered". The check that exists to tell "I
+        # typed zt start and nothing appeared" from "I have not started anything
+        # yet" always reported the second, and the whole run still said no
+        # failures.
+        $registered = @(Get-RegisteredTabBases)
+        $bases      = @{}
+        foreach ($t in $tabs) { $bases[$t] = (Get-TabIdentity $t) }
+
+        $matching = @($tabs | Where-Object {
+            $b = $bases[$_]
+            $b -and ($ZtLayoutTabs -notcontains $_) -and
+            (($registered.Count -eq 0) -or ($registered -contains $b))
+        })
+
+        # An unreadable or empty registry falls back to counting every tab that
+        # is not the layout's own, for the reason zj-claude-tab.ps1 falls back:
+        # reporting "nothing open" over a session full of tabs is worse than
+        # over-counting by one.
+        $how = if ($registered.Count -gt 0) { 'registered' } else { 'non-layout, registry unreadable' }
+
         if ($matching.Count -gt 0) {
-            Add-Result '3 transport' "Tabs named $Prefix*" 'PASS' "$($matching.Count) found: $($matching -join ', ')"
+            Add-Result '3 transport' 'Project tabs' 'PASS' "$($matching.Count) ${how}: $($matching -join ', ')"
+        } elseif ($registered.Count -gt 0) {
+            Add-Result '3 transport' 'Project tabs' 'INFO' "None open - $($registered.Count) registered. Open one: zt start <id>"
         } else {
-            $regCount = 0
-            $devFile = Get-DeviceConfigPath
-            if (Test-Path -LiteralPath $devFile) {
-                try {
-                    $d = Get-Content -LiteralPath $devFile -Raw | ConvertFrom-Json
-                    if ($d.PSObject.Properties.Name -contains 'workspaces') { $regCount = @($d.workspaces).Count }
-                } catch { }
-            }
-            if ($regCount -gt 0) {
-                Add-Result '3 transport' "Tabs named $Prefix*" 'INFO' "None open - $regCount registered. Open one: zt start <id>"
-            } else {
-                Add-Result '3 transport' "Tabs named $Prefix*" 'INFO' "None open, none registered yet. Register a folder: zt add <path>"
-            }
+            Add-Result '3 transport' 'Project tabs' 'INFO' 'None open, none registered yet. Register a folder: zt add <path>'
         }
     } else {
         Add-Result '3 transport' 'query-tab-names' 'FAIL' 'No output - session not reachable'

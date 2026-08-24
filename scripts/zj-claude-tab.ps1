@@ -230,8 +230,21 @@ function Get-ZtRegisteredTabBases {
             if (-not $w) { continue }
             # An explicit name wins, exactly as Get-ZtTabName has it; otherwise
             # the tab is the leaf of whatever path this device resolved.
+            #
+            # REDUCED SINCE 0.7.22, exactly as Get-ZtTabName now reduces it. The
+            # `name` field is not always a name someone chose - the old collision
+            # branch wrote `claude-<leaf>-<key>` into it - and a registry entry
+            # spelled that way matches no tab that creation can now make, so the
+            # pad walked past that project for good. Read verbatim here, this
+            # script would keep doing so after the module stopped.
             $n = $null
-            if ($w.PSObject.Properties.Name -contains 'name' -and $w.name) { $n = "$($w.name)" }
+            if ($w.PSObject.Properties.Name -contains 'name' -and $w.name) {
+                $n = "$($w.name)"
+                if ($Prefix -and $n.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    $stripped = $n.Substring($Prefix.Length)
+                    if ($stripped) { $n = $stripped }
+                }
+            }
             if (-not $n -and $w.PSObject.Properties.Name -contains 'rel' -and $w.rel) { $n = Split-Path "$($w.rel)" -Leaf }
             if (-not $n -and $w.PSObject.Properties.Name -contains 'abs' -and $w.abs) { $n = Split-Path "$($w.abs)" -Leaf }
             if (-not $n -and $w.PSObject.Properties.Name -contains 'id'  -and $w.id ) { $n = "$($w.id)" }

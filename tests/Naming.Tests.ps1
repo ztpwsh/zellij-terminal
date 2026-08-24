@@ -190,8 +190,15 @@ Describe 'Tab name and session name round trip' {
         # `claude-tools`, which recognition reduces to `tools` - and the
         # registry, holding `claude-tools`, no longer agrees with it.
         #
-        # Not hypothetical for a repo about Claude. The escape hatch is an
-        # explicit name, which Get-ZtTabName returns verbatim.
+        # Not hypothetical for a repo about Claude.
+        #
+        # 0.7.22 CLOSED THE ESCAPE HATCH, because it was never open. This block
+        # used to end by saying an explicit name is returned verbatim, and it
+        # demonstrated that by calling Get-ZtTabName with no -Prefix - which no
+        # real caller does. Threaded the way the rig actually threads it, an
+        # explicit name is now reduced like everything else. Nothing can hold a
+        # tab whose name begins `claude-`, and that is the honest end of it:
+        # recognition would have reduced such a tab out from under any match.
         $tab = & $script:M { Get-ZtTabName -Workspace $null -Path 'C:\code\claude-tools' }
         $tab | Should -Be 'claude-tools'
 
@@ -202,7 +209,10 @@ Describe 'Tab name and session name round trip' {
 
         $ws = [pscustomobject]@{ name = 'claude-tools' }
         (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\claude-tools' } $ws) |
-            Should -Be 'claude-tools'
+            Should -Be 'claude-tools' -Because 'no prefix declared means nothing is legacy'
+
+        (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\claude-tools' -Prefix 'claude-' } $ws) |
+            Should -Be 'tools' -Because 'every real caller threads -Prefix, and then it is reduced'
     }
 
 
@@ -286,6 +296,238 @@ Describe 'Get-ZtTabBase - the activity glyph is decoration, not identity' {
             # - [ ] ? * . - so -like reads it as a pattern and matches nothing.
             ((Get-Content -LiteralPath $p -Raw).Contains($rule)) |
                 Should -BeTrue -Because "$f has to strip the glyph the same way"
+        }
+    }
+}
+
+Describe 'The prefix drift class - 0.7.22' {
+
+    <#
+        WHY THIS BLOCK EXISTS, and why the rest of this file did not catch what
+        it is here to catch.
+
+        0.7.20 dropped the `claude-` prefix from tab names. Creation stopped
+        using it; recognition did not, deliberately, so an existing session
+        kept its tab. That asymmetry is sound. What was not sound is that FOUR
+        other places went on using the prefix as a MEMBERSHIP TEST - asking
+        "is this tab called claude-*?", a question with no true answer any more.
+        None errored. Each simply matched nothing, and matching nothing is
+        indistinguishable from there being nothing to match. `zt check` reported
+        no failures on a machine with four live project tabs it could not see.
+
+        Every existing test in this file passes a name in and asserts the name
+        that comes back. That is why the suite stayed green: the tests supply
+        the prefixed input themselves, so they go on agreeing with a function
+        that nothing in the real rig can still feed. The assertions below run
+        the other way - they pin that the two halves of each comparison CAN be
+        equal, which is the property that actually broke.
+    #>
+
+    BeforeAll {
+        function Get-ZtCodeText {
+            <#
+                Source with comment lines removed.
+
+                The first draft of the D4 assertion below went red against the
+                fix that was already in - it matched the COMMENT that quotes the
+                old `-like "$Prefix*"` line to explain what was wrong with it.
+                A test that forbids naming the defect in a comment is worse than
+                no test: it would be silenced by deleting the explanation.
+            #>
+            param([string]$Path)
+            $lines = Get-Content -LiteralPath $Path |
+                Where-Object { $_ -notmatch '^\s*#' }
+            return ($lines -join "`n")
+        }
+    }
+
+    Context 'The invariant: one name, not two spellings' {
+
+        # THE TEST THAT WOULD HAVE CAUGHT ALL FOUR. Whatever Get-ZtTabName
+        # produces has to survive the reduction recognition applies, or the
+        # half that creates a tab and the half that finds one are working on
+        # different strings - which is silent, because go-to-tab-name no-ops on
+        # a miss and exits 0.
+        It 'produces a name that recognition leaves alone: <Case>' -ForEach @(
+            @{ Case = 'derived from the leaf';   Ws = $null }
+            @{ Case = 'an explicit override';    Ws = [pscustomobject]@{ name = 'mytab' } }
+            @{ Case = 'a legacy explicit name';  Ws = [pscustomobject]@{ name = 'claude-web-api' } }
+            @{ Case = 'a legacy collision name'; Ws = [pscustomobject]@{ name = 'claude-api-3f2a' } }
+            @{ Case = 'no name property at all'; Ws = [pscustomobject]@{ id = 'api' } }
+        ) {
+            $tab = & $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\web-api' -Prefix 'claude-' } $Ws
+
+            $tab | Should -Not -BeNullOrEmpty
+            (& $script:M { param($t) Get-ZtSessionName -Tab $t -Prefix 'claude-' } $tab) |
+                Should -Be $tab -Because 'the name the registry derives must be the name the session creates'
+            (& $script:M { param($t) Get-ZtTabBase -Name $t } $tab) |
+                Should -Be $tab -Because 'a freshly derived name carries no glyph'
+        }
+
+        It 'never derives a name that begins with the legacy prefix' {
+            # The stronger statement, and the one that is cheap to check: if no
+            # derived name can start with `claude-`, no derived name can be
+            # reduced out from under a match.
+            $cases = @(
+                @{ P = 'C:\code\web-api';      W = $null }
+                @{ P = 'C:\code\claude-tools'; W = [pscustomobject]@{ name = 'claude-tools' } }
+                @{ P = 'C:\code\api';          W = [pscustomobject]@{ name = 'claude-stock-reconciliation' } }
+            )
+            foreach ($c in $cases) {
+                $tab = & $script:M { param($w, $p) Get-ZtTabName -Workspace $w -Path $p -Prefix 'claude-' } $c.W $c.P
+                $tab | Should -Not -BeLike 'claude-*' -Because "$($c.P) must not derive an unmatchable name"
+            }
+        }
+    }
+
+    Context 'D1 - a stored legacy name is reduced, not returned verbatim' {
+
+        # THE BAD DATA THIS WAS FOUND IN. Three entries on the reporting machine
+        # held names no human chose: the old collision branch derived them, and
+        # they name a tab creation can no longer make. Returned as they stood,
+        # the workspace read `stopped` with its tab open, and its flag file was
+        # looked up under a filename the hook never writes.
+        It 'reduces <Stored> to <Want>' -ForEach @(
+            @{ Stored = 'claude-stock-reconciliation'; Want = 'stock-reconciliation' }
+            @{ Stored = 'claude-joolz-dev-fcfb930a';   Want = 'joolz-dev-fcfb930a' }
+            @{ Stored = 'claude-AL-213f8564';          Want = 'AL-213f8564' }
+        ) {
+            $ws = [pscustomobject]@{ name = $Stored }
+            (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\thing' -Prefix 'claude-' } $ws) |
+                Should -Be $Want
+        }
+
+        It 'leaves a name that is not legacy completely alone' {
+            $ws = [pscustomobject]@{ name = 'mytab' }
+            (& $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\api' -Prefix 'claude-' } $ws) |
+                Should -Be 'mytab'
+        }
+
+        It 'reduces it in zj-claude-tab.ps1 too, which reads the registry itself' {
+            # The pad's latency path does not import the module, so it carries
+            # its own copy of this derivation. A fix in one and not the other is
+            # the same defect wearing a different hat.
+            $p = Join-Path $PSScriptRoot '..\scripts\zj-claude-tab.ps1'
+            $t = Get-Content -LiteralPath $p -Raw
+            $block = [regex]::Match($t, 'function Get-ZtRegisteredTabBases[\s\S]*?\n\}').Value
+            $block | Should -Not -BeNullOrEmpty
+            $block | Should -Match 'StartsWith\(\$Prefix' -Because (
+                'it reads the same name field and must reduce it the same way')
+        }
+    }
+
+    Context 'D2 - the collision comparison has to be able to fire' {
+
+        It 'compares two spellings that can be equal' {
+            # The branch built `claude-<leaf>` and compared it to Get-ZtTabName,
+            # which returns a bare leaf. Never equal, so two folders sharing a
+            # leaf silently shared one tab and the documented warning never
+            # appeared. Pinned against the source, because making a real
+            # collision happen needs a registry on disk - and the defect is in
+            # the comparison, not in the writing.
+            $p = Join-Path $PSScriptRoot '..\module\ZellijTerminal\Public\Registry.ps1'
+            $t = Get-ZtCodeText $p
+            $t | Should -Not -Match '\$wantTab\s*=\s*\$Prefix' -Because (
+                'the other side of this comparison has not carried a prefix since 0.7.20')
+            $t | Should -Match '\$wantTab\s*=\s*Split-Path\s+\$full\s+-Leaf'
+        }
+
+        It 'assigns a disambiguated name that is itself matchable' {
+            # `claude-<leaf>-<key>` is where D1's bad data came from: a defect
+            # that repaired itself by writing more of itself into the registry.
+            # <leaf>-<key> survives the reduction, so the repair is durable.
+            $ws = [pscustomobject]@{ name = 'api-3f2a1b0c' }
+            $tab = & $script:M { param($w) Get-ZtTabName -Workspace $w -Path 'C:\code\api' -Prefix 'claude-' } $ws
+            $tab | Should -Be 'api-3f2a1b0c'
+            (& $script:M { param($t) Get-ZtSessionName -Tab $t -Prefix 'claude-' } $tab) | Should -Be $tab
+        }
+    }
+
+    Context 'D3 - unregistered tabs are excluded by name, not by spelling' {
+
+        It 'knows which tabs the layout opens' {
+            $tabs = & $script:M { $ZtLayoutTabs }
+            $tabs | Should -Contain 'home'
+        }
+
+        It 'excludes exactly the tabs the layout actually declares' {
+            # The real rule, and the one the layout has documented all along:
+            # `home` is deliberately not a workspace. Read it off the template
+            # rather than trusting two lists to stay in step - add a tab there
+            # and this goes red, which is the point.
+            $tpl   = Join-Path $PSScriptRoot '..\zellij\layouts\claude.kdl.template'
+            $text  = Get-Content -LiteralPath $tpl -Raw
+            $names = @([regex]::Matches($text, '(?m)^\s*tab\s+name="([^"]+)"') |
+                        ForEach-Object { $_.Groups[1].Value })
+
+            $names.Count | Should -BeGreaterThan 0
+            $layout = @(& $script:M { $ZtLayoutTabs })
+            foreach ($n in $names) {
+                $layout | Should -Contain $n -Because "the layout opens '$n' and it is not a workspace"
+            }
+            $layout.Count | Should -Be $names.Count -Because 'excluding more than the layout opens hides real tabs'
+        }
+
+        It 'no longer filters the unregistered-tab block by prefix' {
+            # In 0.7.19 this line meant "skip home". Since 0.7.20 it meant "skip
+            # every tab there is", so the block whose whole purpose is to explain
+            # the gap between `zt` and the tab bar could not emit a single row -
+            # and `zt rm` on an open workspace stranded its tab beyond the reach
+            # of `zt close`.
+            $p = Join-Path $PSScriptRoot '..\module\ZellijTerminal\Private\Core.ps1'
+            $t = Get-ZtCodeText $p
+            $t | Should -Not -Match '-notlike\s+"\$Prefix\*"' -Because (
+                'no tab has started with the prefix since 0.7.20')
+            $t | Should -Match '\$ZtLayoutTabs\s+-contains\s+\$t'
+        }
+    }
+
+    Context 'D4 - zt check counts project tabs the way the pad does' {
+
+        It 'does not count them by prefix' {
+            # It reported "None open - 33 registered" directly beneath a
+            # query-tab-names PASS listing four project tabs, and the run still
+            # said no failures. Two rows contradicting each other in one output.
+            $p = Join-Path $PSScriptRoot '..\scripts\Test-Setup.ps1'
+            $t = Get-ZtCodeText $p
+            $t | Should -Not -Match '-like\s+"\$Prefix\*"'
+            $t | Should -Match 'Get-RegisteredTabBases'
+        }
+
+        It 'excludes the same layout tabs the module does' {
+            # A copy of a rule that is now written twice. Same reason as the
+            # config-home rule: this script runs without importing the module,
+            # so the only thing keeping the two in step is this test.
+            $p = Join-Path $PSScriptRoot '..\scripts\Test-Setup.ps1'
+            $t = Get-ZtCodeText $p
+            $m = [regex]::Match($t, '(?m)^\s*\$ZtLayoutTabs\s*=\s*@\(([^)]*)\)')
+            $m.Success | Should -BeTrue -Because 'zt check needs its own copy of the list'
+
+            $theirs = @($m.Groups[1].Value -split ',' |
+                        ForEach-Object { $_.Trim().Trim("'").Trim('"') } |
+                        Where-Object { $_ })
+            $ours = @(& $script:M { $ZtLayoutTabs })
+            (($theirs | Sort-Object) -join ',') | Should -Be (($ours | Sort-Object) -join ',')
+        }
+
+        It 'reduces a tab to the same identity the module does' {
+            # Its Get-TabIdentity is Get-ZtTabBase followed by Get-ZtSessionName,
+            # written out because the script must not pay for a module import.
+            # Pinned by BEHAVIOUR rather than by text: run both and compare, so
+            # a rewrite that is still correct does not go red.
+            $p    = Join-Path $PSScriptRoot '..\scripts\Test-Setup.ps1'
+            $body = [regex]::Match((Get-Content -LiteralPath $p -Raw),
+                        'function Get-TabIdentity[\s\S]*?\n\}').Value
+            $body | Should -Not -BeNullOrEmpty
+
+            # $Prefix is a script parameter there, so give the extracted copy one.
+            $sb = [scriptblock]::Create("param(`$Name, `$Prefix)`n$body`nGet-TabIdentity -Name `$Name")
+
+            foreach ($n in @('web-api', 'web-api ~', 'claude-web-api', 'claude-web-api !', 'home', 'claude-api-3f2a .')) {
+                $mine   = & $sb $n 'claude-'
+                $theirs = & $script:M { param($x) Get-ZtSessionName -Tab (Get-ZtTabBase -Name $x) -Prefix 'claude-' } $n
+                $mine | Should -Be $theirs -Because "'$n' has to reduce identically in both"
+            }
         }
     }
 }

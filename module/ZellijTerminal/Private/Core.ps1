@@ -319,6 +319,14 @@ function Get-ZtProp {
 #  Identity
 # ---------------------------------------------------------------------------
 
+# Tabs the LAYOUT opens that are not workspaces. `home` runs `zt home` and is
+# deliberately unregistered - that is what keeps the pad's cycle keys walking
+# past it, and since 0.7.20 it is also the only thing a "which tabs are mine"
+# test has to exclude. Named here rather than inferred from a prefix, because
+# inferring it from `claude-*` is precisely what broke when the prefix went.
+# Keep in step with zellij\layouts\claude.kdl.template.
+$ZtLayoutTabs = @('home')
+
 function Get-ZtKey {
     <#
         A workspace's stable identity is its directory, not its name: renaming a
@@ -394,11 +402,33 @@ function Get-ZtTabName {
         tabs to cycle, so dropping it needed a real answer rather than a shorter
         string: zj-claude-tab.ps1 now asks the device registry which tabs are
         workspaces, and falls back to the old pattern when it cannot read one.
+
+        AN EXPLICIT NAME IS REDUCED THE SAME WAY A TAB IS, and that is 0.7.22.
+        The `name` field is not always an override someone chose: the collision
+        branch in Register-ZellijTerminal wrote `<prefix><leaf>-<key>` into it,
+        and this registry still held three of them - `claude-stock-reconciliation`
+        among them - naming a tab that creation can no longer make. Returned
+        verbatim, that name matched nothing: the workspace read as `stopped`
+        with its tab open two feet away, its flag file was looked up under a
+        filename the hook never writes, and the pad walked past it forever.
+
+        So the returned name goes through Get-ZtSessionName, which is the same
+        reduction recognition already applies. Everything then resolves to ONE
+        string - creation, matching, the flag path and `--name`.
+
+        The cost, stated plainly: you cannot have a tab whose name begins
+        `claude-`. Ask for one and you get it without the prefix. That escape
+        hatch never worked anyway - recognition reduced the tab out from under
+        it the moment anything tried to match, which is the ambiguity
+        tests\Naming.Tests.ps1 has recorded since 0.7.20.
+
+        Reduction is gated on $Prefix, because with no legacy prefix declared
+        there is nothing to call legacy. Every real caller threads it.
     #>
     param($Workspace, [string]$Path, [string]$Prefix = '')
 
     $explicit = Get-ZtProp $Workspace 'name'
-    if ($explicit) { return $explicit }
+    if ($explicit) { return (Get-ZtSessionName -Tab $explicit -Prefix $Prefix) }
     return (Split-Path $Path -Leaf)
 }
 
@@ -1492,9 +1522,22 @@ function Get-ZtWorkspaceRecords {
     #
     # No path, because Zellij will not tell us a tab's directory - so these
     # cannot be started or stopped until they are registered against a folder.
+    #
+    # EXCLUDED BY NAME, NOT BY SPELLING, since 0.7.22. This used to skip any tab
+    # not called `claude-*`, which in 0.7.19 meant "skip the layout's home tab"
+    # and since 0.7.20 has meant "skip every tab there is" - so the block whose
+    # whole job is to explain the gap between `zt` and the tab bar could not emit
+    # a single row, and the remedy the setup guide gives for exactly that symptom
+    # stopped working. Worse, `zt rm` on a workspace with its tab open stranded
+    # that tab: no row here means no record, and Find-ZtWorkspace searches
+    # records, so `zt close` answered "No workspace matching" for a tab sitting
+    # in the bar.
+    #
+    # The real rule is the one the layout already documents: `home` is
+    # deliberately not a workspace. Everything else that is open is real.
     $known = @($out | ForEach-Object { $_.Tab })
     foreach ($t in $tabs) {
-        if ($t -notlike "$Prefix*") { continue }
+        if ($ZtLayoutTabs -contains $t) { continue }
         if ($known -contains $t) { continue }
 
         $flag    = Join-Path $flagDir ($t + '.json')
@@ -1512,7 +1555,7 @@ function Get-ZtWorkspaceRecords {
 
         $out += [pscustomobject]@{
             PSTypeName = 'ZellijTerminal.Workspace'
-            Id         = ($t -replace ('^' + [regex]::Escape($Prefix)), '')
+            Id         = (Get-ZtSessionName -Tab $t -Prefix $Prefix)
             Key        = ''
             State      = 'unregistered'
             Waiting    = $waiting

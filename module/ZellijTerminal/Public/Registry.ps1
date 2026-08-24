@@ -306,12 +306,21 @@ function Register-ZellijTerminal {
     }
     if (-not $Id) { $Id = New-ZtId -Path $full -Taken $taken }
 
-    # Tab-name collision. Two folders with the same leaf both want
-    # <prefix><leaf>, and go-to-tab-name would then pick one arbitrarily - the
-    # pad would silently answer the wrong session. Catch it here, where it can
-    # still be fixed, rather than at 2am.
+    # Tab-name collision. Two folders with the same leaf both want <leaf>, and
+    # go-to-tab-name would then pick one arbitrarily - the pad would silently
+    # answer the wrong session. Catch it here, where it can still be fixed,
+    # rather than at 2am.
+    #
+    # BOTH SIDES LOST THE PREFIX IN 0.7.22. This built `claude-<leaf>` and
+    # compared it to Get-ZtTabName, which has returned a bare leaf since 0.7.20 -
+    # two spellings that could never be equal, so the branch stopped firing and
+    # two folders sharing a leaf name quietly shared one tab with no warning.
+    # The disambiguated name it assigns lost the prefix too: when this branch
+    # last did fire it wrote `claude-<leaf>-<key>` into the registry, which is
+    # unmatchable for the same reason and is where this machine's three bad
+    # entries came from. A defect that repairs itself by writing more of itself.
     if (-not $Name) {
-        $wantTab = $Prefix + (Split-Path $full -Leaf)
+        $wantTab = Split-Path $full -Leaf
         foreach ($w in ($deviceWs + $sharedWs)) {
             if ((Get-ZtProp $w 'key') -eq $key) { continue }
             $otherPath = Resolve-ZtPath -Workspace $w -DeviceConfig $device
@@ -439,6 +448,11 @@ function Unregister-ZellijTerminal {
         # Leave whatever is running alone.
         [switch]$KeepRunning,
 
+        # Close the tab as well. `rm` forgets the project and leaves the tab;
+        # `close` closes the tab and keeps the project. This is both, in the
+        # order that works.
+        [switch]$CloseTab,
+
         [string]$Session = 'claude',
         [string]$Prefix  = 'claude-'
     )
@@ -452,6 +466,17 @@ function Unregister-ZellijTerminal {
 
     if (-not $KeepRunning -and $ws.State -eq 'running') {
         Stop-ZellijTerminal -Name $ws.Id -Session $Session -Prefix $Prefix -Confirm:$false
+    }
+
+    # `rm` and `close` are easy to reach for interchangeably and do OPPOSITE
+    # things, and doing them in this order used to strand the tab: the
+    # registration goes, the tab stays, and `zt close` then cannot see it.
+    # Say so at the moment the mistake is made rather than leaving a tab in the
+    # bar that nothing addresses.
+    $tabOpen = ($ws.Tab -and $ws.State -in @('running', 'tab-only', 'stale'))
+    if ($tabOpen -and $CloseTab) {
+        Remove-ZellijTerminalTab -Name $ws.Id -Session $Session -Prefix $Prefix -Confirm:$false
+        $tabOpen = $false
     }
 
     $device = Get-ZtDeviceConfig
@@ -468,6 +493,12 @@ function Unregister-ZellijTerminal {
 
     Remove-ZtLive $ws.Key
     Write-Host "Unregistered '$($ws.Id)'" -ForegroundColor Green
+
+    if ($tabOpen) {
+        Write-Warning ("The tab '$($ws.Tab)' is still open. 'zt rm' forgets the project; it does " +
+                       "not close anything. Close it with: zt close $($ws.Tab)")
+        Write-Host "  next time, both at once: zt rm $($ws.Id) -CloseTab" -ForegroundColor DarkGray
+    }
 }
 
 function Publish-ZellijTerminal {

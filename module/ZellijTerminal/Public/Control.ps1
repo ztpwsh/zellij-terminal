@@ -348,6 +348,84 @@ function Sync-ZellijTerminal {
         }
     }
 
+    # ---------------------------------------------------------------------
+    #  Registry integrity, added in 0.7.22
+    # ---------------------------------------------------------------------
+    #
+    # A workspace's identity is Get-ZtKey, the hash of its normalised path. The
+    # HOOK writes its live record under the hash of cwd and cannot do anything
+    # else - no config lookup, no state, under 5.1, on every session start. So
+    # an entry whose stored key does not hash from its own path can never be
+    # joined to that record: it never reaches `running`, and `zt restart` cannot
+    # resume it.
+    #
+    # It gets worse on its own. Register-ZtDiscovered sees a key it does not
+    # know, registers the folder a second time, and the workspace splits in two
+    # - one half addressable and one half inert, both listed.
+    #
+    # Five of 33 entries were in this state on the machine that found it, and
+    # NO CURRENT CODE PATH CAN WRITE IT: key and abs are both derived from the
+    # same $full in one statement block, and Get-ZtKey has never changed. Six
+    # hash variants were tried against the orphans and none matched, so the
+    # cause is unproven - most likely a hand-edited or externally-written path
+    # on an existing entry. What is certain either way is that nothing detected
+    # it and the failure was silent. This is the detection.
+    $device  = Get-ZtDeviceConfig
+    $devWs   = @(Get-ZtProp $device 'workspaces' @())
+    $fixed   = @()
+    $seen    = @{}
+    $changed = $false
+
+    foreach ($w in $devWs) {
+        $path = Resolve-ZtPath -Workspace $w -DeviceConfig $device
+        $id   = Get-ZtProp $w 'id' '?'
+
+        # An unresolvable path is not a broken key - it is a root this device
+        # does not define, or a folder on a drive that is not mounted. Leave it
+        # exactly as it is; `zt list` already reports it as unavailable.
+        if (-not $path) { $fixed += $w; continue }
+
+        $want = Get-ZtKey $path
+        $have = Get-ZtProp $w 'key'
+
+        # A duplicate resolves to a path another entry already owns. Keep the
+        # first, which is the one whose key will match; drop the second, which
+        # is the split half.
+        if ($seen.ContainsKey($want)) {
+            if ($PSCmdlet.ShouldProcess("'$id'", "Drop duplicate registration of $path")) {
+                Write-Host "Dropped duplicate '$id' - $path is already registered as '$($seen[$want])'" -ForegroundColor DarkGray
+                if ($have) { Remove-ZtLive $have }
+                $cleared++
+                $changed = $true
+                continue
+            }
+            $fixed += $w
+            continue
+        }
+        $seen[$want] = $id
+
+        if ($have -ne $want) {
+            if ($PSCmdlet.ShouldProcess("'$id'", "Re-key from $have to $want")) {
+                # The old key's live record belongs to nothing now. Drop it here
+                # rather than leaving a record no path hashes to.
+                if ($have) { Remove-ZtLive $have }
+                # -Force, not assignment: an entry that predates the field has
+                # no `key` property at all, and assigning to one that is not
+                # there throws under Set-StrictMode rather than creating it.
+                $w | Add-Member -NotePropertyName 'key' -NotePropertyValue $want -Force
+                Write-Host "Re-keyed '$id' - $have did not hash from $path (now $want)" -ForegroundColor DarkGray
+                $cleared++
+                $changed = $true
+            }
+        }
+        $fixed += $w
+    }
+
+    if ($changed) {
+        $device.workspaces = @($fixed)
+        Set-ZtDeviceConfig $device
+    }
+
     if ($cleared -eq 0) { Write-Host 'Nothing stale.' -ForegroundColor Green }
 }
 
