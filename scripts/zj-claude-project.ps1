@@ -4,11 +4,16 @@
     runtime, so the layout file doesn't have to be edited for every project.
 
 .DESCRIPTION
-    Tabs are named <Prefix><leaf>, where <leaf> is the project directory's leaf
-    folder name - the same convention claude-zj-hook.ps1 derives from the cwd
-    Claude Code passes on stdin, and the same one zj-claude-tab.ps1 cycles.
-    Because all three derive the name the same way, adding a project needs no
-    configuration anywhere else.
+    Tabs are named <leaf>, the project directory's leaf folder name - the same
+    convention claude-zj-hook.ps1 derives from the cwd Claude Code passes on
+    stdin, and the same one zj-claude-tab.ps1 cycles. Because all three derive
+    the name the same way, adding a project needs no configuration anywhere
+    else.
+
+    NO PREFIX SINCE 0.7.20, and this script was the last thing still adding one.
+    $Prefix is still taken and still threaded, because it is what recognition
+    STRIPS to match a tab made before that change; nothing puts it on. See
+    Get-ZtTabName in the module for the whole shape of that migration.
 
     Compatible with Windows PowerShell 5.1 - no ternary, no ??, no && / ||.
 
@@ -16,8 +21,8 @@
       `zellij action close-tab` closes the FOCUSED tab, not a named one - the
       same trap as `rename-tab` (see docs/00-background.md). So -Remove has to
       focus the target first, which means it changes which tab you are looking
-      at. That is unavoidable via the CLI. -Remove refuses to run unless the
-      name matches <Prefix>* so a stray argument cannot close a tab you did not mean.
+      at. That is unavoidable via the CLI. -Remove refuses to close a tab the
+      LAYOUT owns, and proves afterwards that exactly the named tab went.
 
 .EXAMPLE
     # from inside a project directory
@@ -46,8 +51,9 @@
         work. close-tab is destructive and focus-dependent; it deserves a dry run.
       * Only touch what you own. That module filters by a GUID prefix so it can
         never disturb a hand-made profile. Zellij tabs carry no metadata to
-        stamp, so the equivalent guard here is the name prefix - weaker, hence
-        the before/after check on -Remove as a second line of defence.
+        stamp, and since 0.7.20 they carry no name prefix either, so the
+        equivalent guard here is the layout tab list plus the before/after
+        check on -Remove - which is the half that was actually doing the work.
       * Write-Warning, not throw, for "no match". Not finding something is
         usually a typo, not a crash.
       * Reading JSON-derived objects under Set-StrictMode throws on absent
@@ -92,7 +98,7 @@ param(
     [Parameter(ParameterSetName = 'Add')]
     [switch]$NoFocus,
 
-    # Override the derived <Prefix><leaf> tab name. The registry passes this
+    # Override the derived <leaf> tab name. The registry passes this
     # when two projects share a leaf folder name and would otherwise both claim
     # the same tab - go-to-tab-name would then pick one arbitrarily and the pad
     # would answer the wrong session.
@@ -110,6 +116,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $flagDir = Join-Path $env:TEMP 'claude-zellij-flags'
+
+# Tabs the layout opens that are not workspaces. Same list as $ZtLayoutTabs in
+# module\ZellijTerminal\Private\Core.ps1 and scripts\Test-Setup.ps1, and the
+# same reason: since 0.7.20 there is no prefix to recognise a project tab by, so
+# the honest test is to exclude the one tab we know is not one and treat the
+# rest as real. Keep in step with zellij\layouts\claude.kdl.template.
+$ZtLayoutTabs = @('home')
 
 # Fail loudly and immediately rather than as a raw CommandNotFoundException from
 # somewhere in the middle. Same guard zj-claude-tab.ps1 carries, and the same
@@ -245,8 +258,13 @@ function Add-ProjectTab {
         return $false
     }
 
+    # NO PREFIX. This was `$Prefix + $leaf` until 0.7.23, three releases after
+    # creation was supposed to have stopped doing that. `zt start` hid it by
+    # always passing -TabName, so the only callers that saw it were the ones
+    # invoking this script directly - `-Add` and `-FromBookmarks` - which made
+    # tabs that recognition then reduced out from under them.
     $leaf = Split-Path $full -Leaf
-    $tab  = $Prefix + $leaf
+    $tab  = $leaf
     if ($TabNameOverride) { $tab = $TabNameOverride }
 
     # Already there? Just go to it. A duplicate name would make go-to-tab-name
@@ -449,21 +467,54 @@ if ($PSCmdlet.ParameterSetName -eq 'FromBookmarks') {
 # ============================================================================
 if ($PSCmdlet.ParameterSetName -eq 'Remove') {
 
-    # Accept either "foo" or "claude-foo".
-    $tab = $Remove
-    if ($tab -notlike "$Prefix*") { $tab = $Prefix + $tab }
+    # WHAT WAS ASKED FOR, REDUCED - not decorated.
+    #
+    # This prepended $Prefix when the argument did not already carry it, which
+    # made `zt close web-api` ask Zellij for `claude-web-api`: a name creation
+    # stopped producing in 0.7.20. The tab was right there, and the answer was
+    # "No tab named 'claude-web-api'. Present: web-api" followed by exit 0. So
+    # closing a tab had been impossible for three releases, in the one way this
+    # rig calls the worst - a warning that reads like a typo, and a success code
+    # under it. The only thing that appeared to work was `zt rm`, which
+    # UNREGISTERS, so the visible workaround was the destructive one.
+    #
+    # This is the fifth prefix-as-membership test, after the four 0.7.22 swept.
+    # The invariant is unchanged: the name the registry derives must be a fixed
+    # point of the reduction recognition applies. So reduce what was asked for
+    # the way everything else reduces it, and let the legacy spelling in only if
+    # that is genuinely what is open.
+    $want = Get-ZtTabBase $Remove
+    if ($Prefix -and $want.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $stripped = $want.Substring($Prefix.Length)
+        if ($stripped) { $want = $stripped }
+    }
 
-    # Guard: never close a tab outside the managed namespace. close-tab acts on
-    # whatever is focused, so a typo here would shut something else.
-    if ($tab -notlike "$Prefix*") {
-        Write-Error "Refusing to remove '$tab' - only tabs starting '$Prefix' are managed here."
+    # Guard: never close a tab the layout owns. close-tab acts on whatever is
+    # focused, so a stray argument must not reach it. This used to refuse
+    # anything outside `claude-*`, a namespace that no longer exists; the honest
+    # rule is the one Core.ps1 states - `home` is deliberately not a workspace,
+    # and everything else that is open is real.
+    if ($ZtLayoutTabs -contains $want) {
+        Write-Error ("Refusing to close '$want' - it is the layout's own tab, not a workspace. " +
+                     "It is what the pad cycles PAST, and closing it leaves the session with no home.")
         exit 1
     }
 
     $names = Get-TabNames
-    if ($names -notcontains $tab) {
+    $tab   = $null
+    if ($names -contains $want) {
+        $tab = $want
+    } elseif ($Prefix -and ($names -contains ($Prefix + $want))) {
+        # A tab opened before 0.7.20 is still called `claude-<leaf>` while
+        # everything that names it now says `<leaf>`. Close it by the string
+        # Zellij is actually holding, or this becomes the same silent miss in
+        # the other direction.
+        $tab = $Prefix + $want
+    }
+
+    if (-not $tab) {
         # A miss here is nearly always a typo, not a failure worth an exception.
-        Write-Warning "No tab named '$tab'. Present: $($names -join ', ')"
+        Write-Warning "No tab named '$want'. Present: $($names -join ', ')"
         exit 0
     }
 
@@ -520,15 +571,20 @@ if ($PSCmdlet.ParameterSetName -eq 'Remove') {
 # ============================================================================
 #  LIST  (default)
 # ============================================================================
-$names   = Get-TabNames
-$targets = @($names | Where-Object { $_ -like "$Prefix*" })
+$names = Get-TabNames
+
+# THE SAME MEMBERSHIP TEST, AND IT FAILED THE SAME WAY. `-like "$Prefix*"`
+# matched nothing after 0.7.20, so this printed "No tabs matching 'claude-*'"
+# and then listed every project tab in the session under "Not managed" - the
+# two halves of one screen contradicting each other, with no error anywhere.
+$targets = @($names | Where-Object { $ZtLayoutTabs -notcontains $_ })
 
 Write-Host ''
 Write-Host "  Session '$Session'" -ForegroundColor Cyan
 Write-Host '  ------------------' -ForegroundColor Cyan
 
 if ($targets.Count -eq 0) {
-    Write-Host "  No tabs matching '$Prefix*'." -ForegroundColor Yellow
+    Write-Host '  No project tabs open.' -ForegroundColor Yellow
     Write-Host '  Add one with:  .\zj-claude-project.ps1 -Add <path>' -ForegroundColor DarkGray
 } else {
     foreach ($t in $targets) {
@@ -565,7 +621,7 @@ if ($targets.Count -eq 0) {
     }
 }
 
-$others = @($names | Where-Object { $_ -notlike "$Prefix*" })
+$others = @($names | Where-Object { $ZtLayoutTabs -contains $_ })
 if ($others.Count -gt 0) {
     Write-Host ''
     Write-Host "  Not managed: $($others -join ', ')" -ForegroundColor DarkGray

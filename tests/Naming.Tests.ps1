@@ -530,4 +530,145 @@ Describe 'The prefix drift class - 0.7.22' {
             }
         }
     }
+
+    Context 'D5 - zj-claude-project.ps1, the fifth site and the one that could not close a tab' {
+
+        <#
+            FOUND BY A USER, NOT BY THIS FILE, three releases after 0.7.20.
+
+            `zt close web-api` routes here, and this script prepended the prefix
+            to whatever it was given before looking for it - so it asked for
+            `claude-web-api`, a name creation stopped producing in 0.7.20. The
+            tab was open two feet away. What came back was
+
+                WARNING: No tab named 'claude-web-api'. Present: web-api
+
+            and exit 0. Every symptom of the class: nothing errored, the warning
+            reads like a typo, and the one operation that appeared to work was
+            `zt rm` - which UNREGISTERS. A user who only wanted a tab off the
+            status bar was pushed towards the destructive verb.
+
+            The 0.7.22 sweep read the module and the pad's cycle path. It did
+            not read this script, which is why the sweep assertion below is over
+            the whole shipped set rather than over a list of files someone
+            remembered to name.
+        #>
+
+        BeforeAll {
+            $script:ProjText = Get-ZtCodeText (Join-Path $PSScriptRoot '..\scripts\zj-claude-project.ps1')
+        }
+
+        It 'does not decorate the name it was asked to close' {
+            $script:ProjText | Should -Not -Match '\$tab\s*=\s*\$Prefix\s*\+\s*\$tab' -Because (
+                'prepending the prefix asks for a tab no version of this rig can make')
+        }
+
+        It 'reduces the name it was asked to close, the way recognition does' {
+            $script:ProjText | Should -Match 'StartsWith\(\$Prefix' -Because (
+                'a legacy `claude-web-api` and a current `web-api` are one identity')
+        }
+
+        It 'creates a tab named for the project, with no prefix' {
+            # `zt start` always passes -TabName, so this line was only reachable
+            # by calling the script directly - which is exactly how it survived
+            # three releases of a migration that was supposed to have removed it.
+            $script:ProjText | Should -Not -Match '\$tab\s*=\s*\$Prefix\s*\+\s*\$leaf'
+            $script:ProjText | Should -Match '(?m)^\s*\$tab\s*=\s*\$leaf\s*$'
+        }
+
+        It 'decides what is managed by the layout list, not by the prefix' {
+            $script:ProjText | Should -Not -Match '-like\s+"\$Prefix\*"'
+            $script:ProjText | Should -Not -Match '-notlike\s+"\$Prefix\*"'
+            $script:ProjText | Should -Match '\$ZtLayoutTabs'
+        }
+
+        It 'carries the same layout tab list as the module' {
+            # The third copy of this list. Same reason as the other two: this
+            # script is on the pad and hook paths and must not import the
+            # module, so nothing but this test keeps them in step.
+            $m = [regex]::Match($script:ProjText, '(?m)^\s*\$ZtLayoutTabs\s*=\s*@\(([^)]*)\)')
+            $m.Success | Should -BeTrue
+
+            $theirs = @($m.Groups[1].Value -split ',' |
+                        ForEach-Object { $_.Trim().Trim("'").Trim('"') } |
+                        Where-Object { $_ })
+            $ours = @(& $script:M { $ZtLayoutTabs })
+            (($theirs | Sort-Object) -join ',') | Should -Be (($ours | Sort-Object) -join ',')
+        }
+    }
+
+    Context 'The sweep - no shipped file may ask "does this name start with the prefix?"' {
+
+        <#
+            THE ASSERTION THAT DOES NOT NEED A LIST.
+
+            Four sites were swept in 0.7.22 by naming four files. A fifth sat in
+            a file nobody named, and the suite stayed green over it for three
+            releases. So ask the question of every PowerShell file in the
+            shipped set instead: a prefix membership test is a comparison whose
+            other side has been unable to be true since 0.7.20.
+
+            What is still allowed, and must stay allowed: STRIPPING the prefix
+            (`StartsWith($Prefix` / `.Substring($Prefix.Length)`), which is how a
+            tab made before the change is recognised, and matching the separate
+            legacy `$Pattern` fallback that zj-claude-tab.ps1 uses when it cannot
+            read a registry. Recognition kept the prefix on purpose. Only
+            membership tests are the defect.
+
+            THIS SWEEP WENT RED TWICE, AND BOTH TIMES THE CODE WAS RIGHT.
+
+            First it forbade `$Prefix + $leaf` anywhere, and caught
+            claude-zj-hook.ps1 composing `claude-<leaf>` as a SECOND candidate,
+            after the bare leaf, when looking for the tab a session belongs to -
+            the one thing that still finds a tab opened before 0.7.20. Narrowed
+            to the assignment form `$tab = $Prefix + ...`, it then caught the
+            legacy fallback in the -Remove block of the very file this release
+            fixes, which assigns the prefixed spelling only after a
+            `$names -contains` has proved that spelling is the one Zellij is
+            actually holding.
+
+            So composition is NOT decidable by text, and narrowing the pattern
+            only moves the false positive around. `$Prefix + <name>` is the
+            defect when the result NAMES a tab and is the migration working when
+            it FINDS one, and the difference is in how the value is used two
+            lines later, which no regex over the file can see.
+
+            The sweep therefore holds the half that IS decidable: the membership
+            test, whose other side has been unable to be true since 0.7.20 and
+            which is wrong wherever it appears. That half is not a consolation
+            prize - it is what all four 0.7.22 sites were, and the fifth site
+            had it in BOTH its LIST filter and its -Remove guard, so this
+            assertion would have caught it with no list of files to maintain.
+            Composition stays a per-site assertion, in D5 above, where the test
+            can see the use as well as the shape.
+        #>
+
+        It 'holds across every shipped script, hook and module file' {
+            $root  = Resolve-Path (Join-Path $PSScriptRoot '..')
+            $files = @(
+                Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.ps1' -File
+                Get-ChildItem -LiteralPath (Join-Path $root 'hooks')   -Filter '*.ps1' -File
+                Get-ChildItem -LiteralPath (Join-Path $root 'module')  -Filter '*.ps1' -File -Recurse
+            )
+
+            $files.Count | Should -BeGreaterThan 5 -Because 'an empty sweep proves nothing'
+
+            $bad = @()
+            foreach ($f in $files) {
+                $t = Get-ZtCodeText $f.FullName
+                # Membership tests only, in both spellings and in the bare
+                # `claude*` form. Composing the prefix is deliberately NOT
+                # caught here, in either direction - see above for why no
+                # pattern can separate the two composition cases.
+                foreach ($pat in @('-like\s+"\$Prefix\*"',
+                                   '-notlike\s+"\$Prefix\*"',
+                                   "-like\s+'claude\*'")) {
+                    if ($t -match $pat) { $bad += "$($f.Name): $pat" }
+                }
+            }
+
+            $bad -join '; ' | Should -BeNullOrEmpty -Because (
+                'the prefix is stripped to recognise a legacy tab, never used to decide membership')
+        }
+    }
 }
