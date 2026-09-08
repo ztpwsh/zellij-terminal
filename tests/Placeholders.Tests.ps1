@@ -509,4 +509,82 @@ Describe 'Anonymisation and placeholders' -Skip:(-not $script:HasGit) {
                 ($violations -join "`n"))
         }
     }
+    Context 'Tag objects, which are refs rather than files' {
+
+        <#
+            FOUND 2026-09-08, AFTER EIGHT RELEASES HAD ALREADY SHIPPED WITH IT.
+
+            v0.7.15 through v0.7.22 reached the public remote carrying a real
+            name and email on their `tagger` line. Every commit beside them was
+            correctly `zt contributors <zt@localhost>`, because Publish-Release
+            passes the identity per commit - but nothing made the TAG. Tagging
+            was a hand-typed step in RELEASING.md, and a step you type by hand
+            is a step where the override is forgotten.
+
+            Nothing in this file could have caught it. Every other assertion
+            here reads `git ls-files` or walks historical blobs, and a tagger
+            line is neither a tracked file nor a blob: it is metadata on the
+            tag object. The check was real; its reach was narrower than its
+            name - the same shape as the spike citations that a link-shaped
+            scan walked past thirty-nine times.
+
+            Tagging now happens inside Publish-Release.ps1 under the same
+            $IdentityArgs as the commit, and verifies the tagger off the object
+            afterwards. This is the assertion that keeps it that way.
+        #>
+
+        It 'no publishable tag is tagged by a personal identifier' {
+            # SCOPE, and it matters here more than anywhere else in this file.
+            #
+            # Not every tag is publishable. This private repo also carries
+            # `archive/extracted-copy`, which points outside the release
+            # history, is refused by .githooks/pre-push, and names a person on
+            # purpose - exactly like the unpublished FILES the header above
+            # explains are excluded. Scanning it would make this permanently
+            # red here, which is the false-signal failure this file exists to
+            # prevent, arriving from the other direction.
+            #
+            # So the scan set is the hook's own rule: tags reachable from the
+            # release branch. In a published clone that branch is called main
+            # and is what HEAD points at, so the fallback covers it.
+            $ref = 'release'
+            & git -C $script:RepoRoot rev-parse --verify --quiet "refs/heads/$ref" *> $null
+            if ($LASTEXITCODE -ne 0) { $ref = 'HEAD' }
+
+            $tags = @(& git -C $script:RepoRoot tag --merged $ref 2>$null | Where-Object { $_ })
+            if ($tags.Count -eq 0) {
+                # A shallow CI checkout fetches no tags. Skipping is honest;
+                # passing over an empty set would not be.
+                Set-ItResult -Skipped -Because "this clone has no tags reachable from $ref"
+                return
+            }
+
+            # Same fragment trick as the file scan above, and for the same
+            # reason: a literal here would answer to a grep of the published
+            # repo for exactly the string this test exists to keep out of it.
+            $needles = @(
+                ('juli' + 'an'),
+                ('snow' + 'den'),
+                ('snow' + 'dej')
+            )
+            $pattern = '(?i)(' + ($needles -join '|') + ')'
+
+            $violations = foreach ($tag in $tags) {
+                # A lightweight tag has no tagger line at all, which is not a
+                # violation - it carries no identity to leak. Only annotated
+                # tags answer here.
+                foreach ($line in @(& git -C $script:RepoRoot cat-file -p $tag 2>$null |
+                                        Where-Object { $_ -like 'tagger *' })) {
+                    if ($line -match $pattern) {
+                        "  $tag  tagger carries '$($Matches[1])'"
+                    }
+                }
+            }
+            $violations = @($violations)
+
+            $violations.Count | Should -Be 0 -Because (
+                "a tag is published exactly like a commit, and no file scan covers it:`n" +
+                ($violations -join "`n"))
+        }
+    }
 }
