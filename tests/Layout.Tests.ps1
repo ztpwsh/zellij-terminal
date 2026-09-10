@@ -240,4 +240,24 @@ Describe 'zellij config.kdl' {
         ($script:ConfigLines | Where-Object { $_ -match '^\s*default_shell\s+"[^"]+"' }).Count |
             Should -Be 1
     }
+
+    It 'turns advanced_mouse_actions off' {
+        # 0.45 defaults this to true, and on native Windows it costs about a
+        # second per character on paste - measured at ~20s for 19 characters on
+        # 0.45.1. Every mouse report shares the input path with the paste and
+        # each one drives a render. Lose this line and pasting becomes unusable
+        # in a way that looks like the terminal has hung rather than like a
+        # setting.
+        ($script:ConfigLines | Where-Object { $_ -match '^\s*advanced_mouse_actions\s+false' }).Count |
+            Should -Be 1
+    }
+
+    It 'does not disable mouse_mode wholesale' {
+        # The bisect said advanced_mouse_actions alone is sufficient. Turning
+        # the whole of mouse handling off also fixes the paste, which is exactly
+        # why it is worth pinning against: it is the tempting wrong fix, and it
+        # silently costs wheel scrolling and click-to-focus.
+        ($script:ConfigLines | Where-Object { $_ -match '^\s*mouse_mode\s+false' }).Count |
+            Should -Be 0
+    }
 }

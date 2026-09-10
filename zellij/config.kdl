@@ -37,3 +37,20 @@ pane_frames false
 // Session serialisation: an exited session stays in `zellij list-sessions`
 // and resurrects with its tabs, names and directories.
 session_serialization true
+
+// PASTE LATENCY. 0.45 added mouse hover effects and pane grouping and turned
+// them on by default. On native Windows that costs roughly a SECOND PER
+// CHARACTER on paste - measured here on 0.45.1 as ~20s for 19 characters, in a
+// plain pwsh pane and in Claude Code alike, while the same paste into Windows
+// Terminal outside Zellij is instant.
+//
+// Mouse tracking puts every mouse report on the same input path as the paste,
+// and each report drives a render. This one line is the whole fix: bisected
+// against `mouse_mode`, `mouse_hover_effects`, `mouse_hover_tips` and
+// `mouse_scroll_resize`, each of which can stay at its default. So the wheel,
+// click-to-focus and Ctrl+scroll resize all still work - what goes is hover
+// decoration and pane grouping.
+//
+// Do NOT reach for `mouse_mode false` instead. It also fixes the paste, and it
+// costs you scrolling.
+advanced_mouse_actions false
