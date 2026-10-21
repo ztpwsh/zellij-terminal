@@ -204,6 +204,48 @@ Describe 'A claude workspace starts what its registry entry says' {
     }
 }
 
+Describe 'Resuming only a conversation Claude actually saved' {
+    # The hook records a session id at SessionStart; Claude writes nothing for a
+    # session nobody typed into. `zt restart` resumed one of those on Z2 and the
+    # tab was left at "No conversation found".
+
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..\module\ZellijTerminal\ZellijTerminal.psd1') -Force
+        $script:CfgDir = Join-Path ([System.IO.Path]::GetTempPath()) ('zt-cc-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path (Join-Path $script:CfgDir 'projects\C--work-web-api') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:CfgDir 'projects\C--work-web-api\saved-1.jsonl') -Value '{}'
+        $script:OldCfg = $env:CLAUDE_CONFIG_DIR
+        $env:CLAUDE_CONFIG_DIR = $script:CfgDir
+    }
+
+    AfterAll {
+        $env:CLAUDE_CONFIG_DIR = $script:OldCfg
+        Remove-Item -LiteralPath $script:CfgDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'finds a saved conversation in any project folder' {
+        & (Get-Module ZellijTerminal) { Test-ZtClaudeTranscript 'saved-1' } | Should -BeTrue
+    }
+
+    It 'reports one that was never saved' {
+        & (Get-Module ZellijTerminal) { Test-ZtClaudeTranscript 'never-typed-in' } | Should -BeFalse
+        & (Get-Module ZellijTerminal) { Test-ZtClaudeTranscript '' } | Should -BeFalse
+    }
+
+    It 'defers to claude when there is nowhere to look' {
+        $env:CLAUDE_CONFIG_DIR = Join-Path $script:CfgDir 'absent'
+        try {
+            & (Get-Module ZellijTerminal) { Test-ZtClaudeTranscript 'anything' } | Should -BeTrue
+        } finally { $env:CLAUDE_CONFIG_DIR = $script:CfgDir }
+    }
+
+    It 'Start resumes a saved id and continues the folder otherwise' {
+        $control = Get-Content -Raw (Join-Path $PSScriptRoot '..\module\ZellijTerminal\Public\Control.ps1')
+        $control | Should -Match ([regex]::Escape('if ($sid -and (Test-ZtClaudeTranscript $sid))'))
+        $control | Should -Match ([regex]::Escape('$cmd = "$base --continue --name'))
+    }
+}
+
 Describe 'The rule is written in two languages and must not drift' {
 
     It 'both name the pid field and the startedAt guard' {

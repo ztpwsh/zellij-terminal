@@ -883,6 +883,24 @@ function Get-ZtClaudeCommand {
     return 'claude'
 }
 
+function Test-ZtClaudeTranscript {
+    # Whether Claude ever saved a conversation under this session id. The hook
+    # records the id at SessionStart, but a session nobody typed into is never
+    # written, so resuming it gives "No conversation found" and leaves the tab
+    # at a bare prompt - what `zt restart` did on a real machine. Unknown (no
+    # projects dir to look in) answers $true: let claude decide, as before.
+    param([string]$SessionId)
+    if (-not $SessionId) { return $false }
+    $root = $env:CLAUDE_CONFIG_DIR
+    if (-not $root) { $root = Join-Path $HOME '.claude' }
+    $projects = Join-Path $root 'projects'
+    if (-not (Test-Path -LiteralPath $projects)) { return $true }
+    foreach ($d in @(Get-ChildItem -LiteralPath $projects -Directory -ErrorAction SilentlyContinue)) {
+        if (Test-Path -LiteralPath (Join-Path $d.FullName ($SessionId + '.jsonl'))) { return $true }
+    }
+    return $false
+}
+
 function Get-ZtEndedSessionId {
     # The session id of the last conversation that ENDED in a workspace. The
     # hook moves the live record to ended\ on SessionEnd rather than deleting

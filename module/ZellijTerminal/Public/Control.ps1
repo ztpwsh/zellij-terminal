@@ -34,7 +34,8 @@ function Start-ZellijTerminal {
         [string]$Name,
 
         # For claude workspaces: resume the last session in that folder rather
-        # than starting a fresh one. The session id comes from the hook.
+        # than starting a fresh one. The session id comes from the hook; one
+        # Claude never saved falls back to --continue.
         [switch]$Resume,
 
         # Resume this specific session. -Resume normally reads the id from the
@@ -88,8 +89,16 @@ function Start-ZellijTerminal {
             $base = Get-ZtClaudeCommand $ws.Command
             $cmd = "$base --name '$sessionName'"
             if ($Resume) {
-                if ($sid) {
+                if ($sid -and (Test-ZtClaudeTranscript $sid)) {
                     $cmd = "$base --resume $sid --name '$sessionName'"
+                } elseif ($sid) {
+                    # Recorded but never saved - nothing was typed in it. The
+                    # conversation worth getting back is the last one that WAS
+                    # saved in this folder, which is what --continue picks.
+                    Write-Warning ("Claude never saved session $sid (nothing was typed in it) - " +
+                                   "continuing the most recent conversation in $($ws.Path) instead.")
+                    $cmd = "$base --continue --name '$sessionName'"
+                    $sid = $null
                 } else {
                     Write-Warning "No recorded Claude session for '$($ws.Id)' - starting a fresh one."
                 }
