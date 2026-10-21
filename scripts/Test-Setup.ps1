@@ -17,10 +17,32 @@
 [CmdletBinding()]
 param(
     [string]$Session = 'claude',
-    [string]$Prefix  = 'claude-'
+    [string]$Prefix  = 'claude-',
+
+    # Do not ask GitHub whether Zellij or zjstatus has a newer release.
+    [switch]$Offline
 )
 
+# The zjstatus build zt was last rendered against. Mirrors install.ps1, which
+# downloads exactly this; tests/Versions.Tests.ps1 pins the two together.
+$ZjstatusVersion = '0.25.0'
+$ZjstatusSha256  = '282CEAB219E56E1908C9FAC33907241FE6C3E1EF7D85FAAB3E5F438CEF87B8FE'
+
 $results = New-Object System.Collections.ArrayList
+
+function Get-LatestReleaseVersion {
+    # The newest release of a GitHub repo, or $null when it cannot be asked.
+    # Never an error: an offline machine is not a broken rig.
+    param([string]$Repo)
+    try {
+        # Windows PowerShell 5.1 does not offer TLS 1.2 by default; GitHub needs it.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $r = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 5 -ErrorAction Stop
+        $m = [regex]::Match([string]$r.tag_name, '\d+(\.\d+){1,3}')
+        if ($m.Success) { return [version]$m.Value }
+    } catch { }
+    return $null
+}
 
 function Add-Result {
     param(
@@ -551,6 +573,33 @@ if (Test-Path -LiteralPath $hookLog) {
 # ===========================================================================
 Add-Result 'env' 'PowerShell' 'INFO' $PSVersionTable.PSVersion.ToString()
 
+# BEHIND IS SAID, NEVER FIXED. Nothing in zt upgrades Zellij: 0.45 made paste
+# cost about a second per character here, so a new Zellij is something to read
+# the release notes for first. zjstatus is pinned instead - install.ps1 fetches
+# the build the bar was rendered against - so a newer one is news, not a fault.
+if ($zellij -and -not $Offline) {
+    $zvRaw = (& $zellij.Source --version 2>&1 | Out-String)
+    $zvMatch = [regex]::Match($zvRaw, '\d+\.\d+\.\d+')
+    $latestZellij = Get-LatestReleaseVersion 'zellij-org/zellij'
+    if (-not $zvMatch.Success) {
+        Add-Result 'env' 'Zellij up to date' 'INFO' "Could not read the version from: $($zvRaw.Trim())"
+    } elseif (-not $latestZellij) {
+        Add-Result 'env' 'Zellij up to date' 'INFO' "$($zvMatch.Value) - could not reach GitHub to compare"
+    } elseif ([version]$zvMatch.Value -lt $latestZellij) {
+        Add-Result 'env' 'Zellij up to date' 'WARN' (
+            "$($zvMatch.Value) installed, $latestZellij released. Not upgraded for you - read " +
+            "github.com/zellij-org/zellij/releases first, then: winget upgrade zellij")
+    } else {
+        Add-Result 'env' 'Zellij up to date' 'PASS' "$($zvMatch.Value), the latest release"
+    }
+
+    $latestZjstatus = Get-LatestReleaseVersion 'dj95/zjstatus'
+    if ($latestZjstatus -and $latestZjstatus -gt [version]$ZjstatusVersion) {
+        Add-Result 'env' 'zjstatus release' 'INFO' (
+            "v$latestZjstatus is out; zt pins v$ZjstatusVersion until the bar has been rendered against the new one")
+    }
+}
+
 # The ZellijTerminal module (zt) is the front door for typing commands. It is a
 # convenience, never a dependency: the macro pad and the hook call the scripts
 # directly and do not care whether it is installed. So a missing module is INFO,
@@ -668,9 +717,16 @@ if (Test-Path -LiteralPath $zjLayout) {
         $wasm = Join-Path $env:APPDATA 'Zellij\data\plugins\zjstatus.wasm'
         if (Test-Path -LiteralPath $wasm) {
             $kb = [int]((Get-Item -LiteralPath $wasm).Length / 1KB)
-            Add-Result '4 hooks' 'zjstatus plugin' 'PASS' "$wasm ($kb KB)"
+            $sha = (Get-FileHash -LiteralPath $wasm -Algorithm SHA256).Hash
+            if ($sha -eq $ZjstatusSha256) {
+                Add-Result '4 hooks' 'zjstatus plugin' 'PASS' "v$ZjstatusVersion, the tested build - $wasm"
+            } else {
+                Add-Result '4 hooks' 'zjstatus plugin' 'WARN' (
+                    "$wasm ($kb KB) is not the build zt was tested with (v$ZjstatusVersion). " +
+                    "Fix: re-run install.ps1, which backs yours up and fetches it")
+            }
         } else {
-            Add-Result '4 hooks' 'zjstatus plugin' 'FAIL' "Layout references zjstatus but $wasm is missing"
+            Add-Result '4 hooks' 'zjstatus plugin' 'FAIL' "Layout references zjstatus but $wasm is missing. Fix: re-run install.ps1"
         }
 
         # A PLUGIN THAT IS PRESENT IS NOT A PLUGIN THAT MAY RUN. Zellij holds

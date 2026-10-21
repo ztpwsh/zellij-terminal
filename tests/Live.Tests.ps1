@@ -163,10 +163,44 @@ Describe 'The hook records the pid' {
         $script:Hook | Should -Match 'pid\s*=\s*\$env:CLAUDE_PID'
     }
 
-    It 'still deletes the record on SessionEnd' {
+    It 'still takes the record out of live\ on SessionEnd' {
         # The pid makes SessionEnd optional, not pointless: when it does run it
         # is instant and exact, and nothing has to wait for a process to die.
-        $script:Hook | Should -Match "if \(\`$hookEvent -eq 'SessionEnd'\) \{\s*Remove-Item"
+        $script:Hook | Should -Match "if \(\`$hookEvent -eq 'SessionEnd'\) \{[\s\S]*?Move-Item -LiteralPath \`$liveFile[\s\S]*?Remove-Item -LiteralPath \`$liveFile"
+    }
+
+    It 'keeps the ended record where zt restart reads it' {
+        # A session closed by hand must still be resumable. The hook and
+        # Get-ZtEndedSessionId must agree on the directory, or restart silently
+        # starts a blank conversation again.
+        $script:Hook | Should -Match "Join-Path \`$liveBase 'ZellijTerminal\\ended'"
+        $script:Core | Should -Match "Join-Path 'ended' \(\`$Key \+ '\.json'\)"
+    }
+}
+
+Describe 'A claude workspace starts what its registry entry says' {
+
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..\module\ZellijTerminal\ZellijTerminal.psd1') -Force
+    }
+
+    It 'falls back to plain claude when the command is empty' {
+        & (Get-Module ZellijTerminal) { Get-ZtClaudeCommand '' }    | Should -Be 'claude'
+        & (Get-Module ZellijTerminal) { Get-ZtClaudeCommand '  ' }  | Should -Be 'claude'
+        & (Get-Module ZellijTerminal) { Get-ZtClaudeCommand $null } | Should -Be 'claude'
+    }
+
+    It 'uses the registry command when there is one' {
+        & (Get-Module ZellijTerminal) { Get-ZtClaudeCommand ' claude --model opus ' } |
+            Should -Be 'claude --model opus'
+    }
+
+    It 'is what Start builds both the fresh and the resumed command from' {
+        # A second hard-coded 'claude' in Start would make the field work for
+        # one path and be silently ignored on the other - restart, usually.
+        $control = Get-Content -Raw (Join-Path $PSScriptRoot '..\module\ZellijTerminal\Public\Control.ps1')
+        $control | Should -Match '\$base = Get-ZtClaudeCommand \$ws\.Command'
+        $control | Should -Not -Match '\$cmd = "claude '
     }
 }
 

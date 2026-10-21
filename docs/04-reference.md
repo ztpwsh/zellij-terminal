@@ -29,7 +29,7 @@
 | `zt go` / `next` / `prev` | jump to whoever's waiting, or cycle |
 | `zt attach` (`zac`) | attach, or focus the window already attached |
 | `zt roots` / `zt root <name> <path>` | what root names mean on this device |
-| `zt check` | the layer check |
+| `zt check` | the layer check, plus whether Zellij or zjstatus has a newer release (reported, never installed) |
 | `zt sessions` | Zellij **sessions** — the level above tabs |
 | `zt sessions kill <name>` | stop a stray session; `-Delete` to forget it too |
 | `zt dock` | pin the workspace band to the Command Palette dock |

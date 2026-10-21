@@ -323,6 +323,13 @@ function Uninstall-ZellijTerminal {
                 $removed += 'live records'
             }
         }
+        $endedDir = Join-Path (Split-Path -Parent $liveDir) 'ended'
+        if (Test-Path -LiteralPath $endedDir) {
+            if ($PSCmdlet.ShouldProcess($endedDir, 'Remove ended-session records')) {
+                Remove-Item -LiteralPath $endedDir -Recurse -Force -ErrorAction SilentlyContinue
+                $removed += 'ended-session records'
+            }
+        }
     } else {
         $n = 0
         try { $n = @(Get-ZtProp (Get-ZtDeviceConfig) 'workspaces' @()).Count } catch { }

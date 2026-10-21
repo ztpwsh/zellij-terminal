@@ -64,7 +64,12 @@ param(
     # of this installer that creates anything outside your profile - a named
     # session, deleted again seconds later. Skip it for an unattended run, or
     # where starting a process is not wanted.
-    [switch]$SkipLiveProbe
+    [switch]$SkipLiveProbe,
+
+    # Do not download zjstatus. Without it the status bar does not render;
+    # everything else works. The test suite passes this so it never touches
+    # the network.
+    [switch]$SkipPluginDownload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -115,6 +120,14 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 # 0.44 is the first native Windows release. Earlier versions are not "mostly
 # fine", they are the wrong platform entirely.
 $MinZellij = [version]'0.44'
+
+# The zjstatus build the bar was last RENDERED against - not read about: a
+# headless client's capture, searched for every tab name, the overflow markers
+# and the piped activity. Raise the pin only after doing that again. The hash
+# is of the release asset, so a swapped or truncated download is refused.
+# Mirrored in scripts\Test-Setup.ps1; tests\Versions.Tests.ps1 pins the pair.
+$ZjstatusVersion = '0.25.0'
+$ZjstatusSha256  = '282CEAB219E56E1908C9FAC33907241FE6C3E1EF7D85FAAB3E5F438CEF87B8FE'
 
 function Write-Step { param([string]$Text) Write-Host "  $Text" -ForegroundColor Cyan }
 function Write-Note { param([string]$Text) Write-Host "    $Text" -ForegroundColor DarkGray }
@@ -360,10 +373,55 @@ if (-not $SkipZellijConfig) {
         Write-Note $layDst
     }
 
-    if (-not (Test-Path -LiteralPath (Join-Path $zjPluginDir 'zjstatus.wasm'))) {
-        Write-Note 'zjstatus.wasm not present - the status bar will not render.'
-        Write-Note "  download it from github.com/dj95/zjstatus/releases into"
+    # --- zjstatus, the pinned build -----------------------------------------
+    #
+    # Fetched rather than left to you, because left to you it drifted: a copy
+    # downloaded once stayed put through every release after it, and nothing
+    # said so. A different build already there is backed up, not discarded -
+    # it may be one you chose. A failed download is a note, never a failed
+    # install: the bar is the only thing that needs it.
+    $wasmDst = Join-Path $zjPluginDir 'zjstatus.wasm'
+    $wasmOk  = $false
+    if (Test-Path -LiteralPath $wasmDst) {
+        $wasmOk = ((Get-FileHash -LiteralPath $wasmDst -Algorithm SHA256).Hash -eq $ZjstatusSha256)
+    }
+    if ($wasmOk) {
+        Write-Note "zjstatus v$ZjstatusVersion already in place"
+    } elseif ($SkipPluginDownload) {
+        Write-Note "zjstatus not downloaded (-SkipPluginDownload) - the status bar needs v$ZjstatusVersion in"
         Write-Note "  $zjPluginDir"
+    } elseif ($PSCmdlet.ShouldProcess($wasmDst, "Download zjstatus v$ZjstatusVersion")) {
+        $wasmTmp = Join-Path ([IO.Path]::GetTempPath()) ('zjstatus-' + [guid]::NewGuid().ToString('N') + '.wasm')
+        try {
+            # Windows PowerShell 5.1 does not offer TLS 1.2 by default; GitHub needs it.
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $wasmUrl = "https://github.com/dj95/zjstatus/releases/download/v$ZjstatusVersion/zjstatus.wasm"
+            Invoke-WebRequest -Uri $wasmUrl -OutFile $wasmTmp -UseBasicParsing -TimeoutSec 60
+            $got = (Get-FileHash -LiteralPath $wasmTmp -Algorithm SHA256).Hash
+            if ($got -ne $ZjstatusSha256) {
+                Write-Warn "zjstatus download did not match the pinned hash - not installed."
+                Write-Note "  expected $ZjstatusSha256"
+                Write-Note "  got      $got"
+            } else {
+                if (-not (Test-Path -LiteralPath $zjPluginDir)) {
+                    New-Item -ItemType Directory -Path $zjPluginDir -Force | Out-Null
+                }
+                if (Test-Path -LiteralPath $wasmDst) {
+                    $wasmBak = "$wasmDst.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+                    Copy-Item -LiteralPath $wasmDst -Destination $wasmBak -Force
+                    Write-Note "existing zjstatus.wasm backed up to $wasmBak"
+                }
+                Move-Item -LiteralPath $wasmTmp -Destination $wasmDst -Force
+                Write-Note "zjstatus v$ZjstatusVersion -> $wasmDst"
+                Write-Note '  sessions already running keep the build they loaded; new ones get this'
+            }
+        } catch {
+            Write-Warn "zjstatus could not be downloaded: $($_.Exception.Message)"
+            Write-Note "  the bar needs v$ZjstatusVersion from github.com/dj95/zjstatus/releases in"
+            Write-Note "  $zjPluginDir"
+        } finally {
+            if (Test-Path -LiteralPath $wasmTmp) { Remove-Item -LiteralPath $wasmTmp -Force -ErrorAction SilentlyContinue }
+        }
     }
 
     # --- the plugin permission grant ----------------------------------------
@@ -853,8 +911,8 @@ if (-not $SkipZellijConfig) {
             }
 
             if (-not (Test-Path -LiteralPath $locFs)) {
-                # NOT a failure: this script does not download the plugin, and
-                # says so above. But it must not be silent either.
+                # NOT a failure: the download was skipped or did not work, and
+                # said why above. But it must not be silent either.
                 Write-Warn "note: $locFs is not there yet - the bar appears once you download it"
             }
         }

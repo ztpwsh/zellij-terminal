@@ -872,6 +872,28 @@ function Set-ZtLive {
     Write-ZtJson (Join-Path $dir ($Key + '.json')) ([pscustomobject]$rec)
 }
 
+function Get-ZtClaudeCommand {
+    # What starts a claude workspace, before zt adds --name and --resume. The
+    # registry's `command` field, so a project can carry its own flags -
+    # "claude --model opus" - in the file you would look in to find out what
+    # runs; empty means plain `claude`. zt owns --name and --resume, so a
+    # command that already carries either would pass it twice.
+    param([string]$Command)
+    if ($Command -and $Command.Trim()) { return $Command.Trim() }
+    return 'claude'
+}
+
+function Get-ZtEndedSessionId {
+    # The session id of the last conversation that ENDED in a workspace. The
+    # hook moves the live record to ended\ on SessionEnd rather than deleting
+    # it, so a session closed by hand can still be resumed by `zt restart`.
+    param([string]$Key)
+    $p = Join-Path (Split-Path -Parent (Get-ZtLiveDir)) (Join-Path 'ended' ($Key + '.json'))
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    $rec = Read-ZtJson $p $null
+    return (Get-ZtProp $rec 'sessionId')
+}
+
 function Remove-ZtLive {
     param([string]$Key)
     $p = Join-Path (Get-ZtLiveDir) ($Key + '.json')

@@ -7,6 +7,13 @@ It is not Claude-specific. A workspace of kind `claude` runs Claude Code; one of
 kind `pwsh` runs whatever command line you give it. Everything below applies
 equally to both.
 
+What starts is the workspace's `command` field in the device registry,
+`%LOCALAPPDATA%\ZellijTerminal\devices\<HOSTNAME>.json`, and you can edit it
+there by hand. For a `claude` workspace an empty `command` means plain `claude`;
+put `claude --model opus` there and that project starts with it. `zt` always
+appends `--name <tab>`, and `--resume <id>` on restart, so leave those two out.
+`zt add . -Command 'claude --model opus'` sets the same field.
+
 ---
 
 ## The command surface
@@ -216,6 +223,12 @@ can simply type the command back in, and why `zt close` is a separate verb.
 `zt restart` on a Claude workspace resumes the previous session by default:
 the hook recorded its `session_id`, so you get the same conversation back rather
 than a blank one. `-Fresh` opts out.
+
+That holds when you closed Claude yourself, too — the usual case after a Claude
+Code update, Ctrl+C twice. On `SessionEnd` the hook moves the live record to
+`%LOCALAPPDATA%\ZellijTerminal\ended\` instead of deleting it, and `zt restart`
+falls back to the id it finds there. Run it from any tab; it types into the
+workspace's own.
 
 ---
 

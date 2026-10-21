@@ -111,7 +111,7 @@ BeforeAll {
 `$env:LOCALAPPDATA = '$($Sandbox.LocalAppData)'
 & '$(Join-Path $script:RepoRoot 'install.ps1')' ``
     -ModulePath '$(Join-Path $Sandbox.Root 'Modules')' ``
-    -SkipHook -SkipZellijCheck -SkipLiveProbe -Force $guard *> '$log'
+    -SkipHook -SkipZellijCheck -SkipLiveProbe -SkipPluginDownload -Force $guard *> '$log'
 exit `$LASTEXITCODE
 "@
         & pwsh -NoProfile -File $runner | Out-Null
@@ -139,7 +139,7 @@ exit `$LASTEXITCODE
         Set-Content -LiteralPath $runner -Encoding UTF8 -Value @"
 `$env:APPDATA      = '$($Sandbox.AppData)'
 `$env:LOCALAPPDATA = '$($Sandbox.LocalAppData)'
-& '$(Join-Path $script:RepoRoot 'scripts/Test-Setup.ps1')' *> '$log'
+& '$(Join-Path $script:RepoRoot 'scripts/Test-Setup.ps1')' -Offline *> '$log'
 "@
         & pwsh -NoProfile -File $runner | Out-Null
         return (Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue)

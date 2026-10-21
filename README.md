@@ -180,9 +180,11 @@ to trust it; the install fails with `0x800B0109` until you run it. Restart
 Command Palette afterwards, or it keeps running the extension it loaded at
 startup.
 
-**Status bar** — download `zjstatus.wasm` from
-[dj95/zjstatus](https://github.com/dj95/zjstatus/releases) into
-`%APPDATA%\Zellij\data\plugins\` for coloured per-project activity.
+**Status bar** — `install.ps1` downloads the
+[zjstatus](https://github.com/dj95/zjstatus) build the bar was tested with into
+`%APPDATA%\Zellij\data\plugins\`, checks its hash, and backs up any other build
+it finds there. `zt check` says when Zellij or zjstatus has a newer release; it
+never upgrades either.
 
 ## The one thing to know
 

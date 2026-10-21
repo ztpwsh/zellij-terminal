@@ -100,7 +100,7 @@ BeforeAll {
 $extra
 & '$(Join-Path $script:RepoRoot 'install.ps1')' ``
     -ModulePath '$(Join-Path $Profile_.Root 'Modules')' ``
-    -SkipHook -SkipZellijCheck -SkipServerCheck -SkipLiveProbe -Force *> '$log'
+    -SkipHook -SkipZellijCheck -SkipServerCheck -SkipLiveProbe -SkipPluginDownload -Force *> '$log'
 exit `$LASTEXITCODE
 "@
         & pwsh -NoProfile -File $runner | Out-Null
@@ -174,10 +174,10 @@ Describe 'A cold install' {
             'a grant for a different path than the layout names grants nothing, and fails silently')
     }
 
-    It 'does not claim the plugin binary is present, because it does not ship one' {
-        # install.ps1 does not download zjstatus, and must not pretend
-        # otherwise. A cold profile has no wasm, and the honest outcome is a
-        # note rather than either silence or a failure.
+    It 'does not claim the plugin binary is present when the download was skipped' {
+        # This run passes -SkipPluginDownload so the suite stays off the
+        # network. A cold profile then has no wasm, and the honest outcome is
+        # a note rather than either silence or a failure.
         $script:Result.Log | Should -Match 'is not there yet'
         $script:Result.ExitCode | Should -Be 0 -Because 'a missing optional plugin is not a failed install'
     }

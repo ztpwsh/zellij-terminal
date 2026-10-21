@@ -179,10 +179,12 @@ There is no gallery publish and no release automation in this repository: no
 
 ## What is deliberately not shipped
 
-**No telemetry.** Nothing in the module, the scripts or the hook makes a network
-call. The only outbound traffic any of this causes is git and winget in the
-installer, both run in front of you, and the `zjstatus.wasm` download you do by
-hand.
+**No telemetry.** Nothing is sent anywhere, and the hook and the pad paths never
+touch the network. Three things fetch, and all three only read public GitHub:
+git and winget in the installer, run in front of you; the installer's download
+of the pinned `zjstatus.wasm` (`-SkipPluginDownload` to opt out); and `zt check`
+asking for the latest Zellij and zjstatus release numbers (`-Offline` to opt
+out).
 
 **Nothing written outside your user profile and the clone.** `install.ps1` says
 so in its header, and it holds for every path it touches:

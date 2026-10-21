@@ -117,7 +117,8 @@ $sessionId = $payload.session_id
 # ---------------------------------------------------------------------------
 #  Live record - tells `zt` this folder has a session running in it
 # ---------------------------------------------------------------------------
-#  Written on SessionStart, deleted on SessionEnd, and touched by nothing else.
+#  Written on SessionStart, moved to ended\ on SessionEnd, and touched by
+#  nothing else.
 #  Deliberately NOT a call into the ZellijTerminal module: importing a module
 #  costs more than this whole hook, the module lives on the pwsh 7 module path
 #  and this runs under 5.1, and this code is on the latency path of every
@@ -239,6 +240,16 @@ $liveDir  = Join-Path $liveBase 'ZellijTerminal\live'
 $liveFile = Join-Path $liveDir ((Get-ZtKeyForPath $keyPath) + '.json')
 
 if ($hookEvent -eq 'SessionEnd') {
+    # MOVED, NOT DELETED. The record holds the only copy of the session id, and
+    # a session ended by hand - Ctrl+C after a Claude update - is exactly the one
+    # `zt restart` is asked to bring back. Deleting it left restart with nothing
+    # to resume and it started a blank conversation. A rename costs the same as
+    # a delete, which matters here: this branch races Claude's shutdown.
+    $endedDir = Join-Path $liveBase 'ZellijTerminal\ended'
+    if (-not (Test-Path -LiteralPath $endedDir)) {
+        New-Item -ItemType Directory -Path $endedDir -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    Move-Item -LiteralPath $liveFile -Destination (Join-Path $endedDir (Split-Path -Leaf $liveFile)) -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $liveFile -Force -ErrorAction SilentlyContinue
 }
 elseif ($hookEvent -eq 'SessionStart') {

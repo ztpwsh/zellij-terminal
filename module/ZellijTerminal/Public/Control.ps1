@@ -85,10 +85,11 @@ function Start-ZellijTerminal {
             # The tab keeps its claude- prefix; the session does not. See
             # Get-ZtSessionName - this name is what shows on mobile and desktop.
             $sessionName = Get-ZtSessionName -Tab $ws.Tab -Prefix $Prefix
-            $cmd = "claude --name '$sessionName'"
+            $base = Get-ZtClaudeCommand $ws.Command
+            $cmd = "$base --name '$sessionName'"
             if ($Resume) {
                 if ($sid) {
-                    $cmd = "claude --resume $sid --name '$sessionName'"
+                    $cmd = "$base --resume $sid --name '$sessionName'"
                 } else {
                     Write-Warning "No recorded Claude session for '$($ws.Id)' - starting a fresh one."
                 }
@@ -242,8 +243,11 @@ function Restart-ZellijTerminal {
 
     if (-not $PSCmdlet.ShouldProcess("'$($ws.Id)'", 'Restart')) { return }
 
-    # Capture the session id before Stop clears the live record.
+    # Capture the session id before Stop clears the live record. With no live
+    # record - Claude was already closed by hand - fall back to the one the hook
+    # kept when that session ended, or this would start a blank conversation.
     $sessionId = $ws.Session
+    if (-not $sessionId) { $sessionId = Get-ZtEndedSessionId $ws.Key }
 
     if ($ws.State -eq 'running' -or $ws.State -eq 'tab-only') {
         Stop-ZellijTerminal -Name $ws.Id -Session $Session -Prefix $Prefix -Confirm:$false
@@ -253,7 +257,9 @@ function Restart-ZellijTerminal {
     $resume = $false
     if (-not $Fresh -and $ws.Kind -eq 'claude' -and $sessionId) { $resume = $true }
 
-    Start-ZellijTerminal -Name $ws.Id -Session $Session -Prefix $Prefix -Resume:$resume -Confirm:$false
+    $startArgs = @{ Name = $ws.Id; Session = $Session; Prefix = $Prefix; Resume = $resume; Confirm = $false }
+    if ($resume) { $startArgs['SessionId'] = $sessionId }
+    Start-ZellijTerminal @startArgs
 }
 
 function Remove-ZellijTerminalTab {

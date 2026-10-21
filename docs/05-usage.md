@@ -145,10 +145,10 @@ dir $env:TEMP\claude-zellij-flags        # expect api.json
 
 ### 4. Status bar (optional)
 
-Download `zjstatus.wasm` from
-<https://github.com/dj95/zjstatus/releases> into
-`%APPDATA%\Zellij\data\plugins\`, then keep the `default_tab_template` block in
-`claude.kdl`. Delete that block if you don't want a bar — flags and key 3 work
+`install.ps1` downloads a pinned `zjstatus.wasm` into
+`%APPDATA%\Zellij\data\plugins\` and refuses it if the hash does not match;
+`-SkipPluginDownload` leaves the plugin alone. Keep the `default_tab_template`
+block in `claude.kdl`. Delete that block if you don't want a bar — flags and key 3 work
 without it.
 
 `pipe_status_rendermode "dynamic"` is the load-bearing line. The default

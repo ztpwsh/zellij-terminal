@@ -159,7 +159,9 @@ function Register-ZellijTerminal {
         [ValidateSet('claude', 'pwsh')]
         [string]$Kind = 'claude',
 
-        # For -Kind pwsh: the command line to run.
+        # For -Kind pwsh: the command line to run. For -Kind claude: what to
+        # start instead of plain `claude`, e.g. 'claude --model opus'. zt
+        # still adds --name, and --resume on restart.
         [string]$Command,
 
         # Override the tab name. Needed when two projects share a leaf folder
@@ -379,7 +381,7 @@ function Register-ZellijTerminal {
     # unless -Name was passed, and the derived name is what actually gets used.
     $tabName = Get-ZtTabName -Workspace $entry -Path $full -Prefix $Prefix
     $willRun = switch ($entry.kind) {
-        'claude' { "claude --name $(Get-ZtSessionName -Tab $tabName -Prefix $Prefix)" }
+        'claude' { "$(Get-ZtClaudeCommand $entry.command) --name $(Get-ZtSessionName -Tab $tabName -Prefix $Prefix)" }
         'pwsh'   { if ($entry.command) { $entry.command } else { 'a shell, nothing started' } }
         default  { $entry.kind }
     }
