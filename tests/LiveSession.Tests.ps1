@@ -89,7 +89,7 @@ Describe 'The live probe' -Skip:$NoZellij {
 
         try {
             $proc = Start-Process -FilePath (Get-Command zellij).Source -ArgumentList '-s', $name `
-                -NoNewWindow -PassThru `
+                -WindowStyle Hidden -PassThru `
                 -RedirectStandardOutput (Join-Path $dir 'o.txt') `
                 -RedirectStandardError  (Join-Path $dir 'e.txt')
 

@@ -1015,7 +1015,10 @@ Invoke-Section 'layout parse' {
             -ArgumentList '-l', 'claude' `
             -RedirectStandardOutput $outFile `
             -RedirectStandardError  $errFile `
-            -NoNewWindow -PassThru
+            -WindowStyle Hidden -PassThru
+        # Hidden, not -NoNewWindow: a Zellij client puts the console it runs
+        # in into raw mode and a killed one never restores it, so sharing
+        # yours left the prompt with no Ctrl+C and mouse reports for input.
 
         # A parse error exits immediately. A layout that is fine tries to run a
         # terminal UI against redirected handles, which is not a state to leave

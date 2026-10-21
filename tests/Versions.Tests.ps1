@@ -76,6 +76,72 @@ Describe 'The suite stays off the network' {
     }
 }
 
+Describe 'A Zellij client is never started in the caller''s console' {
+
+    It 'no script or test launches zellij with -NoNewWindow' {
+        # A client sets its console to raw mode and a killed one never sets it
+        # back, so sharing the user's console left their prompt with no Ctrl+C
+        # and mouse reports arriving as typed input - after a clean install.
+        $files = @(Get-ChildItem -Path $script:RepoRoot -Recurse -Include '*.ps1', '*.psm1' -File |
+            Where-Object { $_.FullName -notmatch '[\\/](spikes|\.git)[\\/]' })
+        $hits = @()
+        foreach ($f in $files) {
+            $t = Get-Content -Raw -LiteralPath $f.FullName
+            # One Start-Process call, continuation lines included.
+            foreach ($m in [regex]::Matches($t, '(?s)Start-Process\b.*?(?<!`\r?)\n')) {
+                if ($m.Value -match 'zellij|zjCmd|\$zj\.Source' -and $m.Value -match '-NoNewWindow') {
+                    $hits += $f.Name
+                }
+            }
+        }
+        $hits | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'zt repairs a console something else left broken' {
+    # Measured in a hidden console broken by a killed Zellij client: input
+    # mode 0x1F7 -> 0x298, mouse tracking 1003/1006 left on (DECRQM). After
+    # one `zt help`, 0x1F7 and both off again; the control run stayed broken.
+
+    BeforeAll {
+        $mod = Join-Path $script:RepoRoot 'module/ZellijTerminal'
+        $script:Core     = Get-Content -Raw (Join-Path $mod 'Private/Core.ps1')
+        $script:Dispatch = Get-Content -Raw (Join-Path $mod 'Public/Dispatch.ps1')
+        $script:Select   = Get-Content -Raw (Join-Path $mod 'Public/Select.ps1')
+    }
+
+    It 'every zt verb resets the console before doing anything' {
+        $body = [regex]::Match($script:Dispatch, '(?s)function Invoke-ZellijTerminal \{.*?switch -Regex \(\$Verb\)').Value
+        $body | Should -Match 'Reset-ZtConsoleInput'
+        $body.IndexOf('Reset-ZtConsoleInput') | Should -BeLessThan $body.IndexOf('if (-not $Verb)') -Because (
+            'bare `zt` is the command most likely to be typed into a broken tab')
+    }
+
+    It 'the picker drops queued input before reading keys' {
+        $body = [regex]::Match($script:Select, '(?s)function Select-ZtItem \{.*?\[Console\]::ReadKey\(').Value
+        $body | Should -Match 'Reset-ZtConsoleInput -Flush' -Because (
+            'a queued mouse report reads as Escape, then digits that pick an entry nobody chose')
+    }
+
+    It 'turns off every mouse tracking mode and encoding, and focus reports' {
+        foreach ($m in 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1016) {
+            $script:Core | Should -Match ([regex]::Escape("[?$($m)l")) -Because "mode $m"
+        }
+    }
+
+    It 'restores the default input mode, with VT input off' {
+        # 0x298 & ~0x208 | 0x1E7 = 0x1F7, the mode the console started in.
+        $script:Core | Should -Match ([regex]::Escape('(m & ~0x208u) | 0x1E7u'))
+        ((0x298 -band (-bnot 0x208)) -bor 0x1E7) | Should -Be 0x1F7
+    }
+
+    It 'does nothing to a console it is not attached to' {
+        # The palette and this suite call zt with output redirected;
+        # escape sequences there would land in a log or a JSON stream.
+        $script:Core | Should -Match '(?s)function Reset-ZtConsoleInput \{.*?IsOutputRedirected.*?\[Console\]::Write'
+    }
+}
+
 Describe 'zt check reports versions without changing them' {
 
     It 'never runs an upgrade' {

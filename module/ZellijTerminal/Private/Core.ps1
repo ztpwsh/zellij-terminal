@@ -894,6 +894,75 @@ function Get-ZtEndedSessionId {
     return (Get-ZtProp $rec 'sessionId')
 }
 
+function Reset-ZtConsoleInput {
+    <#
+        Undo what a killed terminal program leaves behind in this console.
+
+        Zellij and Claude Code both turn on mouse tracking when they start and
+        turn it off when they exit cleanly. Killed - the installer's probe,
+        Ctrl+C during a Claude update - they never do, and every mouse movement
+        then arrives at the prompt as typed text: `[555;47;25M` at the prompt,
+        and in the picker its digits pick an entry nobody chose. A killed
+        Zellij client also leaves the console in raw mode: input mode 0x1F7
+        went to 0x298 here (0x1F0 on another run). Processed input off is the
+        dead Ctrl+C; VT input on (0x200) delivers an arrow key as ESC [ A, so
+        the picker reads Escape and cancels.
+
+        Cheap when nothing is wrong: one short write, and the console mode is
+        only rewritten when Ctrl+C is actually off, which is the one case that
+        pays for the P/Invoke compile.
+
+        -Flush also drops input already queued, so the reports that arrived
+        before the reset are not read as keys by the picker that follows.
+    #>
+    param([switch]$Flush)
+
+    try { if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) { return } } catch { return }
+
+    # 1000/1002/1003 tracking, 1005/1006/1015/1016 encodings, 1004 focus. A
+    # host that cannot take VT sequences would print them instead, so ask.
+    $vt = $false
+    try { $vt = [bool]$Host.UI.SupportsVirtualTerminal } catch { }
+    if ($vt) {
+        $e = [char]27
+        try { [Console]::Write("$e[?1000l$e[?1002l$e[?1003l$e[?1004l$e[?1005l$e[?1006l$e[?1015l$e[?1016l") } catch { }
+    }
+
+    $raw = $false
+    try { $raw = [Console]::TreatControlCAsInput } catch { }
+    if ($raw) {
+        # Back to the Windows default, 0x1F7 from 0x298: processed, line and
+        # echo input, insert, quick edit and auto-position on (0x1E7 keeps
+        # mouse input as it was); VT input and window input off.
+        try {
+            if (-not ('ZtConsoleMode' -as [type])) {
+                Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ZtConsoleMode {
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr GetStdHandle(int n);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetConsoleMode(IntPtr h, out uint m);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetConsoleMode(IntPtr h, uint m);
+    public static bool Restore() {
+        IntPtr h = GetStdHandle(-10);
+        uint m;
+        if (!GetConsoleMode(h, out m)) return false;
+        return SetConsoleMode(h, (m & ~0x208u) | 0x1E7u);
+    }
+}
+'@
+            }
+            [void][ZtConsoleMode]::Restore()
+        } catch {
+            try { [Console]::TreatControlCAsInput = $false } catch { }
+        }
+    }
+
+    if ($Flush) {
+        try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { }
+    }
+}
+
 function Remove-ZtLive {
     param([string]$Key)
     $p = Join-Path (Get-ZtLiveDir) ($Key + '.json')

@@ -1004,8 +1004,17 @@ if ((-not $SkipLiveProbe) -and (-not $SkipZellijConfig)) {
         $probeProc = $null
 
         try {
+            # ITS OWN CONSOLE, NEVER YOURS. A Zellij client puts the console it
+            # runs in into raw mode - no line input, no echo, no Ctrl+C - and
+            # this one is killed rather than quit, so it never puts it back.
+            # With -NoNewWindow that console was the user's: after a clean
+            # install the prompt took mouse movement as typing, Ctrl+C did
+            # nothing, and a picker read the digits in a mouse report as a
+            # choice. Measured: input mode 0x1F7 before, 0x1F0 after.
+            # A hidden window gives the client a console of its own; the
+            # session, the attached client and the bar are all still there.
             $probeProc = Start-Process -FilePath $zjCmd2.Source -ArgumentList '-s', $probeName `
-                -NoNewWindow -PassThru `
+                -WindowStyle Hidden -PassThru `
                 -RedirectStandardOutput (Join-Path $probeDir 'o.txt') `
                 -RedirectStandardError  (Join-Path $probeDir 'e.txt')
 

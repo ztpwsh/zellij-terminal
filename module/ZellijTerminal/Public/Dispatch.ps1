@@ -412,6 +412,11 @@ function Invoke-ZellijTerminal {
         [object[]]$Rest = @()
     )
 
+    # A tab left with mouse tracking or raw mode on by a killed Zellij or
+    # Claude types mouse movements into everything that runs in it. `zt` is
+    # what you type next, so it is what clears it.
+    Reset-ZtConsoleInput
+
     if (-not $Verb) { return (Get-ZellijTerminal | Format-ZtTable) }
 
     switch -Regex ($Verb) {

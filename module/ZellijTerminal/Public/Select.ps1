@@ -89,8 +89,12 @@ function Select-ZtItem {
         return $null
     }
 
+    # Mouse reports already queued would be read as keys: a digit picks an
+    # entry nobody chose, and the leading ESC cancels.
+    Reset-ZtConsoleInput -Flush
+
     $index  = 0
-    $height = $Items.Count + 3           # title, blank, items, footer
+    $height = $Items.Count + 3          # title, blank, items, footer
     $width  = 76
     try { $width = [Math]::Max(40, $Host.UI.RawUI.WindowSize.Width - 4) } catch { }
 
