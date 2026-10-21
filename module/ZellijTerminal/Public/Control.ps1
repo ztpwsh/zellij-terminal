@@ -542,6 +542,10 @@ function Connect-ZellijTerminal {
         return
     }
 
+    # Before any attach: an EXITED session would be resurrected, with every
+    # pane held at "Waiting to run" on a pwsh path that may no longer exist.
+    Remove-ZtExitedSession -Session $Session | Out-Null
+
     if ($Here) {
         # --create, never `--session x --layout y`: with --session, --layout
         # means "add these tabs to the existing session" and fails outright on a

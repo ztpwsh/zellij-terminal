@@ -663,7 +663,10 @@ public static class ZtIconExtract {
 
         $wtProfile = [ordered]@{
             name                     = 'zellij-terminal'
-            commandline              = 'pwsh.exe -NoLogo -NoExit -Command "zellij attach --create claude"'
+            # zac -Here, not a bare `zellij attach --create`: zac builds an
+            # EXITED session fresh instead of resurrecting a copy whose panes
+            # wait for Enter on a pwsh path a Store update has since removed.
+            commandline              = 'pwsh.exe -NoLogo -NoExit -Command "zac -Here"'
             startingDirectory        = '%USERPROFILE%'
             suppressApplicationTitle = $true
         }

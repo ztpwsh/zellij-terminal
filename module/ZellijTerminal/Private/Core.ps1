@@ -963,6 +963,48 @@ public static class ZtConsoleMode {
     }
 }
 
+function Remove-ZtExitedSession {
+    <#
+        Delete the session if it has EXITED, so the attach that follows builds
+        it fresh from the layout instead of resurrecting the saved copy.
+
+        A resurrected session is worse than a new one on Windows, twice over.
+        Its panes come back held at "Waiting to run ... <ENTER> run", and the
+        command they wait to run is the exact pwsh.EXE path of the day it was
+        saved - `...\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__...\pwsh.EXE`
+        on Z2, saved in August, two Store updates after which that folder was
+        gone and Enter gave "Command not found". Nor did it ever resume a
+        conversation: it re-runs `claude --name x`, a new one. `zt start` and
+        `zt restart` bring the tabs back with today's pwsh and --resume.
+
+        Returns $true only when a session was deleted and has stopped being
+        listed; a delete that has not landed would hand attach the corpse.
+    #>
+    param([string]$Session = 'claude')
+
+    if (-not (Get-Command zellij -ErrorAction SilentlyContinue)) { return $false }
+
+    $pattern = '^' + [regex]::Escape($Session) + '\s.*EXITED'
+    $listed = @(& zellij list-sessions --no-formatting 2>$null | ForEach-Object { "$_".Trim() })
+    if (-not ($listed | Where-Object { $_ -match $pattern })) { return $false }
+
+    & zellij delete-session $Session --force 2>&1 | Out-Null
+
+    # The server stops listing a deleted session ~100 ms later (measured).
+    for ($i = 0; $i -lt 30; $i++) {
+        $names = @(& zellij list-sessions --no-formatting --short 2>$null | ForEach-Object { "$_".Trim() })
+        if ($names -notcontains $Session) {
+            Write-Host ("Session '$Session' had exited - building it fresh rather than resurrecting a copy " +
+                        "that pins an old PowerShell. Reopen workspaces with: zt start <name>, or zt restart <name> " +
+                        "to resume the conversation.") -ForegroundColor Yellow
+            return $true
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    Write-Warning "Session '$Session' had exited and could not be deleted - attach will resurrect it. Try: zellij delete-session $Session --force"
+    return $false
+}
+
 function Remove-ZtLive {
     param([string]$Key)
     $p = Join-Path (Get-ZtLiveDir) ($Key + '.json')

@@ -374,3 +374,36 @@ Describe 'What zac must keep doing' {
         $script:Control | Should -Match '\$Window = \$Session'
     }
 }
+
+Describe 'zac builds an exited session fresh' {
+    # A resurrected session holds every pane at "Waiting to run" on the exact
+    # pwsh.EXE path of the day it was saved; after a Store update of PowerShell
+    # that path is gone and Enter gives "Command not found". Measured on Z2:
+    # a copy saved under 7.6.4, run under 7.6.7.
+
+    BeforeAll {
+        $script:Core    = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'module/ZellijTerminal/Private/Core.ps1') -Raw
+        $script:Install = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'install.ps1') -Raw
+    }
+
+    It 'deletes an exited session before either attach path' {
+        $body = [regex]::Match($script:Control, '(?s)function Connect-ZellijTerminal \{.*?\n\}').Value
+        $at = $body.IndexOf('Remove-ZtExitedSession')
+        $at | Should -BeGreaterThan 0
+        $at | Should -BeLessThan $body.IndexOf('if ($Here)') -Because 'zac -Here attaches straight away'
+        $at | Should -BeLessThan $body.IndexOf('& wt @wtArgs')
+    }
+
+    It 'deletes only an EXITED session, and confirms it is gone' {
+        $fn = [regex]::Match($script:Core, '(?s)function Remove-ZtExitedSession \{.*?\n\}').Value
+        $fn | Should -Match 'EXITED' -Because 'a running session must never be deleted by an attach'
+        $fn | Should -Match 'delete-session' -Because 'kill-session leaves it resurrectable'
+        $fn | Should -Match '(?s)delete-session.*?for \(\$i = 0.*?list-sessions' -Because (
+            'the server stops listing a deleted session about 100 ms later')
+    }
+
+    It 'the Terminal profile goes through zac rather than a bare attach --create' {
+        $script:Install | Should -Match ([regex]::Escape('-Command "zac -Here"'))
+        $script:Install | Should -Not -Match ([regex]::Escape('-Command "zellij attach --create claude"'))
+    }
+}
