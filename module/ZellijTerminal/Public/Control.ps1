@@ -259,8 +259,38 @@ function Restart-ZellijTerminal {
     if (-not $sessionId) { $sessionId = Get-ZtEndedSessionId $ws.Key }
 
     if ($ws.State -eq 'running' -or $ws.State -eq 'tab-only') {
+        # Read the record before Stop deletes it: its pid is the claude process,
+        # and that process exiting is the only honest signal that the shell has
+        # the keyboard back. A fixed 400 ms was not it - Claude takes longer
+        # than that to shut down, so the resume command was typed into the
+        # dying Claude and lost, and restart only worked the SECOND time, when
+        # there was nothing left to quit.
+        $rec = $null
+        foreach ($l in @(Get-ZtLive)) {
+            if ((Get-ZtProp $l 'key') -eq $ws.Key) { $rec = $l; break }
+        }
+
         Stop-ZellijTerminal -Name $ws.Id -Session $Session -Prefix $Prefix -Confirm:$false
-        Start-Sleep -Milliseconds 400
+
+        if ($rec -and (Get-ZtProp $rec 'pid')) {
+            $deadline = (Get-Date).AddSeconds(15)
+            while ((Test-ZtLiveRecordAlive $rec) -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Milliseconds 200
+            }
+            if (Test-ZtLiveRecordAlive $rec) {
+                # Typing now would land in Claude's input box, not the shell.
+                Write-Error ("'$($ws.Id)' was sent Ctrl+C but its process (pid $(Get-ZtProp $rec 'pid')) " +
+                             "is still running after 15 s, so nothing was typed. Run zt restart again " +
+                             "once it has exited.")
+                return
+            }
+            # The process is gone; give the pane's shell a moment to draw its prompt.
+            Start-Sleep -Milliseconds 500
+        } else {
+            # No pid to watch - a pwsh workspace, or a record the hook never
+            # filled in. Nothing better than a generous guess.
+            Start-Sleep -Milliseconds 1500
+        }
     }
 
     $resume = $false

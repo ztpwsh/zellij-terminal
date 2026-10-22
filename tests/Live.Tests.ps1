@@ -326,8 +326,10 @@ Describe 'Tabs in bar order, and zt move' {
     BeforeEach {
         Reset-Bar
         Mock -ModuleName ZellijTerminal Invoke-ZtZellij $script:FakeZellij
+        # No name stands for the picker; it answers with docs.
         Mock -ModuleName ZellijTerminal Resolve-ZtTarget {
-            [pscustomobject]@{ Id = $Name; Tab = $Name; State = 'running' }
+            $n = $Name; if (-not $n) { $n = 'docs' }
+            [pscustomobject]@{ Id = $n; Tab = $n; State = 'running' }
         }
     }
 
@@ -361,8 +363,9 @@ Describe 'Tabs in bar order, and zt move' {
     }
 
     It 'takes the direction alone and asks which tab' {
-        Move-ZellijTerminalTab first 6>$null
+        Move-ZellijTerminalTab first -ErrorAction Stop 6>$null
         Should -Invoke -ModuleName ZellijTerminal Resolve-ZtTarget -ParameterFilter { -not $Name }
+        Get-Order | Should -Be 'home, docs, web-api, web-frontend'
     }
 
     It 'pad cycling reads list-tabs in position order, falling back to query-tab-names' {
