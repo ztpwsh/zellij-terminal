@@ -1326,10 +1326,47 @@ function Get-ZtTabBase {
     return ($Name -replace ' [v!?*>~#@&+.]$', '')
 }
 
-function Get-ZtTabNames {
-    # BASE names. Callers use these to decide what exists; Get-ZtLiveTabName
-    # converts back when Zellij needs the string it is actually holding.
+function Get-ZtTabRows {
+    <#
+        Every tab with its stable id and its place on the bar, in BAR order.
+
+        query-tab-names lists tabs in CREATION order and ignores moves: after a
+        `move-tab` it still read home, alpha, beta, gamma while list-tabs and
+        dump-layout both said home, alpha, gamma, beta (0.45.1). So anything
+        that cares about order - `zt move`, cycling - reads this instead.
+
+        Name is the LIVE name, glyph and all; Base is the identity. Nothing on
+        a Zellij without list-tabs, and callers fall back to query-tab-names.
+    #>
     param([string]$Session)
+
+    $r = Invoke-ZtZellij -Session $Session -ZArgs @('list-tabs')
+    if (-not $r.Ok -or $r.Output -match "Session '.*' not found") { return }
+
+    $rows = foreach ($line in ($r.Output -split "`r?`n")) {
+        # "TAB_ID  POSITION  NAME" - NAME is the rest of the line, because a
+        # decorated name has a space before its glyph.
+        $m = [regex]::Match($line, '^\s*(\d+)\s+(\d+)\s+(.+?)\s*$')
+        if ($m.Success) {
+            [pscustomobject]@{
+                Id       = [int]$m.Groups[1].Value
+                Position = [int]$m.Groups[2].Value
+                Name     = $m.Groups[3].Value
+                Base     = Get-ZtTabBase $m.Groups[3].Value
+            }
+        }
+    }
+    $rows | Sort-Object Position
+}
+
+function Get-ZtTabNames {
+    # BASE names, in bar order. Callers use these to decide what exists;
+    # Get-ZtLiveTabName converts back when Zellij needs the string it is
+    # actually holding.
+    param([string]$Session)
+
+    $rows = @(Get-ZtTabRows -Session $Session)
+    if ($rows.Count -gt 0) { return @($rows | ForEach-Object { $_.Base }) }
 
     $r = Invoke-ZtZellij -Session $Session -ZArgs @('query-tab-names')
     if (-not $r.Ok) { return @() }

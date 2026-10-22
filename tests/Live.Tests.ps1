@@ -283,3 +283,90 @@ Describe 'The rule is written in two languages and must not drift' {
         $script:ZtStore | Should -Match 'Test-ZtLiveRecordAlive'
     }
 }
+
+Describe 'Tabs in bar order, and zt move' {
+    # query-tab-names lists tabs in CREATION order and ignores moves; list-tabs
+    # carries the position. Measured on 0.45.1: after one move-tab, list-tabs
+    # and dump-layout said home, alpha, gamma, beta while query-tab-names still
+    # said home, alpha, beta, gamma. And move-tab WRAPS at the edges.
+
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..\module\ZellijTerminal\ZellijTerminal.psd1') -Force
+
+        # A fake Zellij holding four tabs, that moves and wraps as 0.45.1 does.
+        $script:Bar = $null
+        function Reset-Bar {
+            $script:Bar = [System.Collections.ArrayList]@(
+                @{ Id = 0; Name = 'home' }, @{ Id = 1; Name = 'web-api' },
+                @{ Id = 2; Name = 'web-frontend ~' }, @{ Id = 3; Name = 'docs' })
+        }
+        $script:FakeZellij = {
+            param($Session, $ZArgs)
+            if ($ZArgs[0] -eq 'list-tabs') {
+                $lines = @('TAB_ID  POSITION  NAME')
+                for ($i = 0; $i -lt $script:Bar.Count; $i++) { $lines += "$($script:Bar[$i].Id)  $i  $($script:Bar[$i].Name)" }
+                # Rows deliberately NOT in position order.
+                return [pscustomobject]@{ Ok = $true; Output = (@($lines[0]) + @($lines[1..($lines.Count - 1)] | Sort-Object -Descending)) -join "`n" }
+            }
+            if ($ZArgs[0] -eq 'move-tab') {
+                $id = [int]$ZArgs[3]
+                $at = -1; for ($i = 0; $i -lt $script:Bar.Count; $i++) { if ($script:Bar[$i].Id -eq $id) { $at = $i } }
+                $tab = $script:Bar[$at]; $script:Bar.RemoveAt($at)
+                $to = $at + 1; if ($ZArgs[1] -eq 'left') { $to = $at - 1 }
+                if ($to -lt 0) { [void]$script:Bar.Add($tab) }
+                elseif ($to -gt $script:Bar.Count) { $script:Bar.Insert(0, $tab) }
+                else { $script:Bar.Insert($to, $tab) }
+                return [pscustomobject]@{ Ok = $true; Output = '' }
+            }
+            return [pscustomobject]@{ Ok = $true; Output = '' }
+        }
+        function Get-Order { @($script:Bar | ForEach-Object { $_.Name -replace ' ~$', '' }) -join ', ' }
+    }
+
+    BeforeEach {
+        Reset-Bar
+        Mock -ModuleName ZellijTerminal Invoke-ZtZellij $script:FakeZellij
+        Mock -ModuleName ZellijTerminal Resolve-ZtTarget {
+            [pscustomobject]@{ Id = $Name; Tab = $Name; State = 'running' }
+        }
+    }
+
+    It 'reads rows in bar order with the glyph stripped' {
+        $rows = @(& (Get-Module ZellijTerminal) { Get-ZtTabRows -Session 'claude' })
+        @($rows | ForEach-Object { $_.Base }) -join ', ' | Should -Be 'home, web-api, web-frontend, docs'
+        $rows[2].Name | Should -Be 'web-frontend ~' -Because 'go-to-tab-name needs the live string'
+        $rows[2].Id   | Should -Be 2
+    }
+
+    It 'Get-ZtTabNames follows the bar, not creation order' {
+        $script:Bar.Reverse(1, 3)
+        (& (Get-Module ZellijTerminal) { Get-ZtTabNames -Session 'claude' }) -join ', ' |
+            Should -Be 'home, docs, web-frontend, web-api'
+    }
+
+    It 'moves one place, and to first, last or a position' {
+        Move-ZellijTerminalTab docs left 6>$null;  Get-Order | Should -Be 'home, web-api, docs, web-frontend'
+        Move-ZellijTerminalTab docs first 6>$null; Get-Order | Should -Be 'home, docs, web-api, web-frontend'
+        Move-ZellijTerminalTab docs last 6>$null;  Get-Order | Should -Be 'home, web-api, web-frontend, docs'
+        Move-ZellijTerminalTab docs 3 6>$null;     Get-Order | Should -Be 'home, web-api, docs, web-frontend'
+    }
+
+    It 'never puts a project tab in front of home, and never wraps' {
+        Move-ZellijTerminalTab web-api left 6>$null
+        Get-Order | Should -Be 'home, web-api, web-frontend, docs' -Because 'one more left would WRAP it to the end'
+        Move-ZellijTerminalTab web-api 1 6>$null
+        Get-Order | Should -Be 'home, web-api, web-frontend, docs'
+        Move-ZellijTerminalTab docs right 6>$null
+        Get-Order | Should -Be 'home, web-api, web-frontend, docs' -Because 'right from the end would wrap to the front'
+    }
+
+    It 'takes the direction alone and asks which tab' {
+        Move-ZellijTerminalTab first 6>$null
+        Should -Invoke -ModuleName ZellijTerminal Resolve-ZtTarget -ParameterFilter { -not $Name }
+    }
+
+    It 'pad cycling reads list-tabs in position order, falling back to query-tab-names' {
+        $tab = Get-Content -Raw (Join-Path $PSScriptRoot '..\scripts\zj-claude-tab.ps1')
+        $tab | Should -Match "(?s)Invoke-Zellij @\('list-tabs'\).*?Sort-Object.*?Invoke-Zellij @\('query-tab-names'\)"
+    }
+}

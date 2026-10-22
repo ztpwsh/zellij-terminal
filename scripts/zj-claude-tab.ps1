@@ -166,11 +166,25 @@ function Get-CurrentTab {
 # Two views of the same list: the BASE names drive every decision, and the map
 # remembers what each one is actually called right now so go-to-tab-name gets
 # the string Zellij is holding.
+#
+# BAR order, from list-tabs. query-tab-names lists tabs in the order they were
+# CREATED and ignores moves, so after `zt move` (or Alt+i / Alt+o) cycling would
+# hop around the bar instead of walking it. query-tab-names stays as the
+# fallback for a Zellij without list-tabs.
 $raw = @(
-    Invoke-Zellij @('query-tab-names') |
-        ForEach-Object { $_.Trim() } |
-        Where-Object   { $_ -ne '' }
+    Invoke-Zellij @('list-tabs') |
+        ForEach-Object { [regex]::Match([string]$_, '^\s*\d+\s+(\d+)\s+(.+?)\s*$') } |
+        Where-Object   { $_.Success } |
+        Sort-Object    { [int]$_.Groups[1].Value } |
+        ForEach-Object { $_.Groups[2].Value }
 )
+if ($raw.Count -eq 0) {
+    $raw = @(
+        Invoke-Zellij @('query-tab-names') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object   { $_ -ne '' }
+    )
+}
 
 if ($raw.Count -eq 0) {
     Write-Error "No tabs found. Is session '$Session' running? Check: zellij list-sessions"

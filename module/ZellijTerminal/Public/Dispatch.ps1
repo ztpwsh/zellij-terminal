@@ -252,7 +252,9 @@ function Show-ZtHelp {
 
     Write-ZtHelpHeading 'Moving between them'
     Write-ZtHelpLine 'zt go' 'jump to whoever is waiting'
-    Write-ZtHelpLine 'zt next | zt prev' 'cycle claude-* tabs'
+    Write-ZtHelpLine 'zt next | zt prev' 'cycle the project tabs, in bar order'
+    Write-ZtHelpLine 'zt move <id> <where>' 'left, right, first, last, or a position'
+    Write-ZtHelpLine '' 'keys: Ctrl+g, then Alt+i / Alt+o, then Ctrl+g'
     Write-ZtHelpLine 'zt flag [id]' 'raise its hand so key 3 jumps to it'
     Write-ZtHelpLine 'zt unflag [id]' 'lower it again'
 
@@ -449,6 +451,7 @@ function Invoke-ZellijTerminal {
         '^stop$'           { return (Invoke-ZtForward 'Stop-ZellijTerminal' $Rest) }
         '^restart$'        { return (Invoke-ZtForward 'Restart-ZellijTerminal' $Rest) }
         '^close$'          { return (Invoke-ZtForward 'Remove-ZellijTerminalTab' $Rest) }
+        '^move$'           { return (Invoke-ZtForward 'Move-ZellijTerminalTab' $Rest) }
 
         '^attach$'         { return (Invoke-ZtForward 'Connect-ZellijTerminal' $Rest) }
         '^next$'           { return (Invoke-ZtForward 'Switch-ZellijTerminal' (@('-Direction','next') + $Rest)) }
@@ -588,7 +591,7 @@ $ztNameCompleter = {
 }
 
 foreach ($fn in @('Start-ZellijTerminal', 'Stop-ZellijTerminal', 'Restart-ZellijTerminal',
-                  'Remove-ZellijTerminalTab', 'Unregister-ZellijTerminal',
+                  'Remove-ZellijTerminalTab', 'Move-ZellijTerminalTab', 'Unregister-ZellijTerminal',
                   'Publish-ZellijTerminal', 'Get-ZellijTerminal')) {
     Register-ArgumentCompleter -CommandName $fn -ParameterName 'Name' -ScriptBlock $ztNameCompleter
 }
@@ -605,7 +608,7 @@ Register-ArgumentCompleter -CommandName 'Invoke-ZellijTerminal' -ParameterName '
     }
 
     try {
-        if (@('start', 'stop', 'restart', 'close', 'rm', 'remove', 'unregister', 'forget',
+        if (@('start', 'stop', 'restart', 'close', 'move', 'rm','remove', 'unregister', 'forget',
               'publish', 'ls', 'list') -contains $verb) {
             Get-ZellijTerminal -All |
                 Where-Object   { $_.Id -like "$wordToComplete*" } |
@@ -633,7 +636,7 @@ Register-ArgumentCompleter -CommandName 'Invoke-ZellijTerminal' -ParameterName '
     # here still works when typed - it just cannot be discovered, which for
     # something like `zt setup` defeats the point of it existing.
     $verbs = @('setup', 'uninstall', 'export', 'import', 'ls', 'all', 'waiting', 'pick', 'add', 'rm', 'publish', 'start', 'stop', 'restart',
-               'close', 'attach', 'next', 'prev', 'go', 'sync', 'flag', 'unflag', 'park', 'restore', 'roots', 'root',
+               'close', 'move', 'attach','next', 'prev', 'go', 'sync', 'flag', 'unflag', 'park', 'restore', 'roots', 'root',
                'config', 'validate', 'check', 'diag', 'pad', 'paste', 'palette', 'dock', 'sessions', 'hotkeys', 'home', 'help')
     $verbs |
         Where-Object   { $_ -like "$wordToComplete*" } |

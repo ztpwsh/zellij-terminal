@@ -21,6 +21,7 @@
 | `zt stop <id>` | Ctrl+C what's running, leave the tab as a shell |
 | `zt restart <id>` | stop, then resume; `-Fresh` for a new session |
 | `zt close <id>` | close the tab, keep the registration |
+| `zt move <id> <where>` | move its tab: `left`, `right`, `first` (just after home), `last`, or a position counting home as 1. Keys: `Ctrl+g`, `Alt+i` / `Alt+o`, `Ctrl+g` |
 | `zt sync` | drop live records whose tabs are gone |
 | `zt park` | stop everything running, remembering what it was |
 | `zt restore` | reopen it, resuming each Claude session; `-Fresh` for new ones |

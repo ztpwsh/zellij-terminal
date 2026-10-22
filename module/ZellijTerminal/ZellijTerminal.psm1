@@ -62,6 +62,7 @@ Export-ModuleMember `
         'Stop-ZellijTerminal',
         'Restart-ZellijTerminal',
         'Remove-ZellijTerminalTab',
+        'Move-ZellijTerminalTab',
         'Sync-ZellijTerminal',
         'Set-ZellijTerminalWaiting',
         'Switch-ZellijTerminal',

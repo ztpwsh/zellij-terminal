@@ -303,6 +303,109 @@ function Remove-ZellijTerminalTab {
     Remove-ZtLive $ws.Key
 }
 
+function Move-ZellijTerminalTab {
+    <#
+    .SYNOPSIS
+        Move a workspace's tab along the bar.
+
+    .DESCRIPTION
+        left / right move it one place; first puts it straight after home;
+        last at the end; a number puts it at that position, counting home as 1.
+        Focus stays where it is.
+
+        home stays first. The layout puts it there and nothing would put it
+        back, so a project tab is never moved in front of it.
+
+    .EXAMPLE
+        zt move web-api left
+        zt move web-api first
+        zt move web-api 3
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        # Omit it and you get the picker.
+        [Parameter(Position = 0)]
+        [string]$Name,
+
+        # left, right, first, last, or a position counting from 1.
+        [Parameter(Position = 1)]
+        [string]$To,
+
+        [string]$Session = 'claude',
+        [string]$Prefix  = 'claude-'
+    )
+
+    $where = '^(left|right|first|last|\d+)$'
+
+    # `zt move left` means "pick one, then move it left".
+    if (-not $To -and $Name -match $where) { $To = $Name; $Name = '' }
+    if ($To -notmatch $where) {
+        Write-Error "Say where to move it: zt move <name> left | right | first | last | <position>"
+        return
+    }
+
+    $ws = Resolve-ZtTarget -Name $Name -Title 'Move which tab?' -Session $Session -Prefix $Prefix
+    if (-not $ws) { return }
+
+    $rows = @(Get-ZtTabRows -Session $Session)
+    if ($rows.Count -eq 0) {
+        Write-Error "Could not read the tabs of session '$Session'. Is it running? (zellij list-sessions)"
+        return
+    }
+
+    $from = -1
+    for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i].Base -eq $ws.Tab) { $from = $i; break } }
+    if ($from -lt 0) {
+        Write-Error "'$($ws.Id)' has no open tab to move. Open it first: zt start $($ws.Id)"
+        return
+    }
+    $id = $rows[$from].Id
+
+    $min = 0
+    if ($from -ne 0 -and $ZtLayoutTabs -contains $rows[0].Base) { $min = 1 }
+    $max = $rows.Count - 1
+
+    switch -Regex ($To) {
+        '^left$'  { $target = $from - 1 }
+        '^right$' { $target = $from + 1 }
+        '^first$' { $target = $min }
+        '^last$'  { $target = $max }
+        default   { $target = [int]$To - 1 }
+    }
+    if ($target -lt $min) { $target = $min }
+    if ($target -gt $max) { $target = $max }
+
+    if ($target -eq $from) {
+        Write-Host "'$($ws.Tab)' is already at position $($from + 1)." -ForegroundColor Yellow
+        return
+    }
+    if (-not $PSCmdlet.ShouldProcess("tab '$($ws.Tab)'", "Move from position $($from + 1) to $($target + 1)")) { return }
+
+    # One place per call, and never across an edge: move-tab WRAPS - left from
+    # the first position lands the tab last (0.45.1). Works with no client
+    # attached, unlike most actions, and does not move focus.
+    $dir   = 'right'
+    $steps = $target - $from
+    if ($steps -lt 0) { $dir = 'left'; $steps = -$steps }
+    for ($i = 0; $i -lt $steps; $i++) {
+        $r = Invoke-ZtZellij -Session $Session -ZArgs @('move-tab', $dir, '--tab-id', "$id")
+        if (-not $r.Ok) {
+            Write-Error "zellij move-tab failed: $($r.Output)"
+            return
+        }
+    }
+
+    # Read it back. An exit code is not evidence on this rig.
+    $after = @(Get-ZtTabRows -Session $Session)
+    $now = -1
+    for ($i = 0; $i -lt $after.Count; $i++) { if ($after[$i].Id -eq $id) { $now = $i; break } }
+    if ($now -ne $target) {
+        Write-Error "Asked for position $($target + 1), but the bar has '$($ws.Tab)' at $($now + 1)."
+        return
+    }
+    Write-Host "Moved '$($ws.Tab)' to position $($target + 1):  $(@($after | ForEach-Object { $_.Base }) -join ', ')" -ForegroundColor Green
+}
+
 function Sync-ZellijTerminal {
     <#
     .SYNOPSIS

@@ -43,6 +43,7 @@ zt start api          # open its tab and run it
 zt stop api           # Ctrl+C it, keep the shell
 zt restart api        # stop, then resume the same Claude session
 zt close api          # close the tab, keep the registration
+zt move api first     # reorder the bar: left, right, first, last, or a position
 zt go                 # jump to whoever is waiting
 zt check              # the layer check
 zac                   # attach, or focus the window already attached
