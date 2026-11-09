@@ -85,6 +85,99 @@ Describe 'Deciding whether a record is alive' {
     }
 }
 
+Describe 'startedAt means the same instant in every culture' {
+    # PowerShell 7's ConvertFrom-Json hands back a DateTime; 5.1 hands back the
+    # ISO string. Re-parsing the DateTime stringifies it invariantly (MM/dd) and
+    # reads it back in the current culture (dd/MM), so under en-GB 8 November
+    # became 11 August: older than the process, so a healthy session read as a
+    # reused pid. Only on days 1-12 - later days throw, and the throw was caught.
+    #
+    # The dates are fixed and Get-Process is mocked so this bites on any day of
+    # the month, not just the ones where the bug happens to be visible.
+
+    BeforeAll {
+        $script:HookAst = [System.Management.Automation.Language.Parser]::ParseInput($script:Hook, [ref]$null, [ref]$null)
+        $script:HookAlive = $script:HookAst.Find({
+            param($a)
+            $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Test-ZtHookLiveRecordAlive'
+        }, $true)
+
+        $script:Cases = @{
+            'as ConvertFrom-Json returns it' = { ('{"startedAt":"2026-11-08T19:00:34.9473338+00:00"}' | ConvertFrom-Json).startedAt }
+            'as a DateTime'                  = { [datetime]::new(2026, 11, 8, 19, 0, 34, [DateTimeKind]::Utc).ToLocalTime() }
+            'as the ISO string'              = { '2026-11-08T19:00:34.9473338+00:00' }
+        }
+    }
+
+    BeforeEach {
+        $script:OldCulture = [System.Globalization.CultureInfo]::CurrentCulture
+        [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('en-GB')
+        # Local on purpose: a real Process.StartTime is, whatever the machine's zone.
+        $script:ProcStart = ([datetimeoffset]'2026-11-08T19:00:27+00:00').LocalDateTime
+    }
+
+    AfterEach { [System.Globalization.CultureInfo]::CurrentCulture = $script:OldCulture }
+
+    It 'keeps a live session alive on a day under 13, <Label>' -ForEach @(
+        @{ Label = 'as ConvertFrom-Json returns it' }
+        @{ Label = 'as a DateTime' }
+        @{ Label = 'as the ISO string' }
+    ) {
+        [System.Globalization.CultureInfo]::CurrentCulture.Name | Should -Be 'en-GB'
+        $script:MockStart = $script:ProcStart
+        Mock -ModuleName ZellijTerminal Get-Process { [pscustomobject]@{ StartTime = $script:MockStart } }
+
+        $rec = [pscustomobject]@{ key = 'a'; pid = '4242'; startedAt = (& $script:Cases[$Label]) }
+        (& $script:M { param($r) Test-ZtLiveRecordAlive $r } $rec) | Should -BeTrue
+    }
+
+    It 'still catches a reused pid on those days' {
+        # The guard against "fixing" this by no longer comparing at all.
+        $script:MockStart = $script:ProcStart.AddMinutes(5)
+        Mock -ModuleName ZellijTerminal Get-Process { [pscustomobject]@{ StartTime = $script:MockStart } }
+
+        $rec = [pscustomobject]@{ key = 'a'; pid = '4242'; startedAt = (& $script:Cases['as ConvertFrom-Json returns it']) }
+        (& $script:M { param($r) Test-ZtLiveRecordAlive $r } $rec) | Should -BeFalse
+    }
+
+    It 'compares instants, whatever offset the record was written in' {
+        $script:MockStart = $script:ProcStart
+        Mock -ModuleName ZellijTerminal Get-Process { [pscustomobject]@{ StartTime = $script:MockStart } }
+
+        $rec = '{"key":"a","pid":"4242","startedAt":"2026-11-08T23:00:34.0000000+04:00"}' | ConvertFrom-Json
+        (& $script:M { param($r) Test-ZtLiveRecordAlive $r } $rec) | Should -BeTrue
+    }
+
+    It 'normalises a UTC value to local, because DateTime comparison ignores Kind' {
+        $utc = [datetime]::new(2026, 11, 8, 19, 0, 34, [DateTimeKind]::Utc)
+        $got = & $script:M { param($v) ConvertTo-ZtLocalTime $v } $utc
+        $got.Kind | Should -Not -Be ([DateTimeKind]::Utc)
+        $got.ToUniversalTime() | Should -Be $utc
+    }
+
+    It 'treats an unreadable startedAt as no evidence' {
+        $script:MockStart = $script:ProcStart
+        Mock -ModuleName ZellijTerminal Get-Process { [pscustomobject]@{ StartTime = $script:MockStart } }
+
+        $rec = [pscustomobject]@{ key = 'a'; pid = '4242'; startedAt = 'not a date' }
+        (& $script:M { param($r) Test-ZtLiveRecordAlive $r } $rec) | Should -BeTrue
+    }
+
+    It 'the hook reads it the same way, <Label>' -ForEach @(
+        @{ Label = 'as ConvertFrom-Json returns it' }
+        @{ Label = 'as a DateTime' }
+        @{ Label = 'as the ISO string' }
+    ) {
+        $script:HookAlive | Should -Not -BeNullOrEmpty
+        . ([scriptblock]::Create($script:HookAlive.Extent.Text))
+        $script:MockStart = $script:ProcStart
+        Mock Get-Process { [pscustomobject]@{ StartTime = $script:MockStart } }
+
+        $rec = [pscustomobject]@{ key = 'a'; pid = '4242'; startedAt = (& $script:Cases[$Label]) }
+        Test-ZtHookLiveRecordAlive $rec | Should -BeTrue
+    }
+}
+
 Describe 'Get-ZtLive keeps dead records, because restore is built on them' {
 
     BeforeAll {

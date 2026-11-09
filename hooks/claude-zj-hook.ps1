@@ -377,8 +377,20 @@ function Test-ZtHookLiveRecordAlive {
     $startedAt = $null
     if ($Record.PSObject.Properties.Name -contains 'startedAt') { $startedAt = $Record.startedAt }
     if ($startedAt) {
-        $when = [datetime]::MinValue
-        if ([datetime]::TryParse("$startedAt", [ref]$when)) {
+        # Never through a string if it is already a DateTime, which it is when
+        # this runs under PowerShell 7: see ConvertTo-ZtLocalTime in Core.ps1.
+        $when = $null
+        if ($startedAt -is [datetime]) {
+            $when = $startedAt
+            if ($when.Kind -eq [DateTimeKind]::Utc) { $when = $when.ToLocalTime() }
+        } else {
+            $parsed = [datetimeoffset]::MinValue
+            $ok = [datetimeoffset]::TryParse("$startedAt",
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AssumeLocal, [ref]$parsed)
+            if ($ok) { $when = $parsed.LocalDateTime }
+        }
+        if ($when) {
             try { if ($proc.StartTime -gt $when) { return $false } } catch { }
         }
     }

@@ -272,6 +272,36 @@ function Write-ZtJson {
     Move-Item -LiteralPath $tmp -Destination $Path -Force
 }
 
+function ConvertTo-ZtLocalTime {
+    <#
+        A timestamp read back from JSON, as a local DateTime, or $null.
+
+        THE VALUE IS NOT ALWAYS A STRING. ConvertFrom-Json returns a DateTime on
+        PowerShell 7 and the ISO text on 5.1. Handing a DateTime to
+        [datetime]::Parse stringifies it invariantly (MM/dd/yyyy) and reads that
+        back in the current culture, so under en-GB 8 November became 11 August
+        and every live session read as a reused pid - on days 1-12 only, because
+        later days throw instead.
+
+        Local because Process.StartTime is, and DateTime comparison looks at the
+        ticks and ignores Kind.
+    #>
+    param($Value)
+
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [DateTimeKind]::Utc) { return $Value.ToLocalTime() }
+        return $Value
+    }
+    if ($Value -is [datetimeoffset]) { return $Value.LocalDateTime }
+
+    $parsed = [datetimeoffset]::MinValue
+    $ok = [datetimeoffset]::TryParse("$Value",
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::AssumeLocal, [ref]$parsed)
+    if ($ok) { return $parsed.LocalDateTime }
+    return $null
+}
+
 function Format-ZtAge {
     <#
         "3h 12m" rather than a timestamp. The question this answers is "have I
@@ -789,10 +819,10 @@ function Test-ZtLiveRecordAlive {
     $startedAt = Get-ZtProp $Record 'startedAt'
     if ($startedAt) {
         try {
-            $recorded = [datetime]::Parse($startedAt)
+            $recorded = ConvertTo-ZtLocalTime $startedAt
             # One second of slack: the record is written moments after the
             # process starts, and clock granularity should not condemn it.
-            if ($proc.StartTime -gt $recorded.AddSeconds(1)) { return $false }
+            if ($recorded -and $proc.StartTime -gt $recorded.AddSeconds(1)) { return $false }
         } catch { }
     }
     return $true
