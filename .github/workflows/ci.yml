@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Pester 6 and PSScriptAnalyzer
         run: |
@@ -103,7 +103,7 @@ jobs:
         # always(), because the run worth keeping the XML from is the one that
         # failed. The default would skip this step for exactly that run.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pester-results
           path: testResults.xml
@@ -114,9 +114,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
